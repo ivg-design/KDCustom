@@ -175,6 +175,30 @@ enum ConfigurationServiceTests {
               (rules["rules"] as? [[String: Any]])?.count == 1 &&
               rules["revision"] as? String == service.revision,
               "focus rule set and ordered list share the authoritative revision")
+        let areaRule = FocusRule(id: "canvas-area", name: "Canvas", targetGroupID: "group-3",
+                                 area: .canvas)
+        let areaRuleObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(areaRule)) as! [String: Any]
+        _ = try service.handle(operation: "contextRules.set", arguments: [
+            "expectedRevision": service.revision, "profileId": "rive-app", "rule": areaRuleObject
+        ])
+        let persistedArea = try store.load().profiles[1].contextRules.last?.area
+        check(service.document.profiles[1].contextRules.last?.area == .canvas &&
+              persistedArea == .canvas,
+              "area-only rule validates and persists through the shared configuration service")
+        let areaRevision = service.revision
+        var invalidAreaRule = areaRuleObject
+        invalidAreaRule["area"] = "unknown"
+        rejects("unknown active area") {
+            _ = try service.handle(operation: "contextRules.set", arguments: [
+                "expectedRevision": areaRevision, "profileId": "rive-app", "rule": invalidAreaRule
+            ])
+        }
+        check(service.revision == areaRevision &&
+              service.document.profiles[1].contextRules.last?.area == .canvas,
+              "unknown area leaves the stored rule and revision unchanged")
+        _ = try service.handle(operation: "contextRules.delete", arguments: [
+            "expectedRevision": service.revision, "profileId": "rive-app", "ruleId": "canvas-area"
+        ])
         let ruleRevision = service.revision
         rejects("stale focus rule edit") {
             _ = try service.handle(operation: "contextRules.set", arguments: [

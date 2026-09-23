@@ -288,7 +288,7 @@ final class ConfigurationService {
                 throw ConfigurationServiceError.invalid("rule must be a JSON object")
             }
             let required: Set<String> = ["id", "name", "enabled", "targetGroupID"]
-            let allowed = required.union(["kind", "role", "identifier", "labelContains"])
+            let allowed = required.union(["kind", "area", "role", "identifier", "labelContains"])
             guard required.isSubset(of: Set(raw.keys)), Set(raw.keys).isSubset(of: allowed) else {
                 throw ConfigurationServiceError.invalid("Focus rule has missing or unexpected fields")
             }

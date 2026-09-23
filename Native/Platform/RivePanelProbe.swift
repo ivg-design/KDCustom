@@ -15,14 +15,15 @@ struct RivePointerSample: Sendable {
 final class RivePanelProbe {
     private let maxNodes = 160
     private let maxDiscoveryNodes = 48
-    private let maxWrapperDepth = 6
-    private let maxDepth = 8
+    private let maxWrapperDepth = 12
+    private let maxDepth = 18
     private let maxDuration: TimeInterval = 0.4
     private let perMessageTimeout: Float = 0.04
     /// Accessed only from the caller's serial background AX queue.
     private var activeDeadline: TimeInterval = 0
 
-    func collect(rivePID: pid_t, pointer: RivePointerSample? = nil) -> RivePanelSnapshot? {
+    func collect(rivePID: pid_t, pointer: RivePointerSample? = nil,
+                 inspectNumericText: Bool = false) -> RivePanelSnapshot? {
         guard !Thread.isMainThread, rivePID > 0,
               NSRunningApplication(processIdentifier: rivePID)?.bundleIdentifier == "app.rive.editor"
         else { return nil }
@@ -103,7 +104,11 @@ final class RivePanelProbe {
                 } else {
                     windowSizedWrapper = false
                 }
-                guard (depth == 0 || (depth < maxWrapperDepth && windowSizedWrapper)),
+                if windowSizedWrapper && depth >= maxWrapperDepth {
+                    truncated = true
+                    break
+                }
+                guard (depth == 0 || windowSizedWrapper),
                       expanded.insert(parentID).inserted else { continue }
                 let children = childElements(of: elements[parentID])
                 for child in children {
@@ -131,6 +136,32 @@ final class RivePanelProbe {
             }
 
             var roots = Set<Int>()
+            // Flutter exposes Stage/timeline/Console chrome independently of
+            // their canvas surfaces. Inspect their small horizontal bars even
+            // when the empty surface has no AX hit-test element.
+            let timeFrames = nodes.filter { $0.anchors.contains(.timeReadout) }.compactMap(\.frame)
+            for node in nodes where node.role == .group {
+                guard let frame = node.frame, windowFrame.contains(frame), frame.width > 0, frame.height > 0 else { continue }
+                let header = frame.width >= windowFrame.width * 0.3 && frame.height <= windowFrame.height * 0.05
+                let timelineList = timeFrames.contains { time in
+                    abs(frame.minX - time.minX) <= windowFrame.width * 0.02 &&
+                    frame.minY >= time.maxY - 2 && frame.minY <= time.maxY + windowFrame.height * 0.08 &&
+                    frame.width <= windowFrame.width * 0.35 && frame.height <= windowFrame.height * 0.5
+                }
+                if header || timelineList { roots.insert(node.id) }
+            }
+            // A valid AX hit test can return the entire Flutter window even
+            // when its semantic children have precise pane geometry. Use the
+            // observed click only to select which local subtrees to inspect.
+            if interactionAt != nil, let point = pointer?.screenPoint {
+                for node in nodes where node.role == .group {
+                    guard let frame = node.frame, windowFrame.contains(frame), frame.contains(point),
+                          frame.width * frame.height <= windowFrame.width * windowFrame.height * 0.65,
+                          frame.width * frame.height >= windowFrame.width * windowFrame.height * 0.01
+                    else { continue }
+                    roots.insert(node.id)
+                }
+            }
             for seed in seeds where !truncated {
                 guard let target = nodes[seed].frame else { continue }
                 var current: Int? = seed
@@ -213,10 +244,28 @@ final class RivePanelProbe {
               let finalWindow = element(kAXFocusedWindowAttribute as CFString, from: app),
               CFEqual(finalWindow, window),
               ProcessInfo.processInfo.systemUptime < deadline else { return nil }
-        return RivePanelSnapshot(pid: rivePID, windowKey: UInt64(CFHash(window)),
+        var snapshot = RivePanelSnapshot(pid: rivePID, windowKey: UInt64(CFHash(window)),
                                  windowFrame: windowFrame, capturedAt: ProcessInfo.processInfo.systemUptime,
                                  focusedNodeID: focusedID, hitNodeID: hitID,
-                                 interactionAt: interactionAt, nodes: nodes, truncated: truncated)
+                                 interactionAt: interactionAt, nodes: nodes, truncated: truncated,
+                                 interactionPoint: interactionAt == nil ? nil : pointer?.screenPoint)
+        snapshot.focusedElementKey = focused.map { UInt64(CFHash($0)) }
+        if let focused, let focusedID,
+           [.textField, .textArea].contains(nodes[focusedID].role) {
+            snapshot.editableTextFocused = true
+            // Area routing needs only a boolean; never retain the field value.
+            if inspectNumericText, let value = string(kAXValueAttribute as CFString, from: focused) {
+                snapshot.numericTextFocused = NumericAdjustment.equalValues(value, value)
+            }
+            guard let stillFocused = element(kAXFocusedUIElementAttribute as CFString, from: app),
+                  CFEqual(stillFocused, focused) else { return nil }
+        }
+        guard let finalApp = element(kAXFocusedApplicationAttribute as CFString, from: system),
+              elementPID(finalApp) == rivePID,
+              let sameWindow = element(kAXFocusedWindowAttribute as CFString, from: app),
+              CFEqual(sameWindow, window),
+              ProcessInfo.processInfo.systemUptime < deadline else { return nil }
+        return snapshot
     }
 
     private func appendPath(to target: AXUIElement?, window: AXUIElement, deadline: TimeInterval,

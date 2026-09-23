@@ -36,6 +36,7 @@ final class StudioModel: ObservableObject {
     @Published private(set) var lastExternalFocus: FocusSnapshot?
     @Published private(set) var lastExternalFocusAt: Date?
     @Published private(set) var panelInspectionStatus = "Panel inspection is off"
+    @Published private(set) var inputAreaStatus = "Area detection is off"
     @Published var appearance = UserDefaults.standard.string(forKey: "appearance") ?? "dark" {
         didSet { UserDefaults.standard.set(appearance, forKey: "appearance"); applyAppearance() }
     }
@@ -48,6 +49,8 @@ final class StudioModel: ObservableObject {
     private let output = SystemActionOutput()
     private let focusObserver = FocusedInputObserver()
     private let panelDiagnostics = RivePanelDiagnostics()
+    private let inputAreaObserver = RiveInputAreaObserver()
+    private var lastObservedArea: InputArea?
     private var focusConfirmedAt: TimeInterval = 0
     private var appIcons: [String: NSImage] = [:]
     private lazy var engine = ActionEngine(output: output)
@@ -87,6 +90,7 @@ final class StudioModel: ObservableObject {
             guard let self else { return }
             self.queuedGroupChange = nil
             self.cancelActions(reason: "Configuration changed")
+            self.inputAreaObserver.reset()
             self.document = document; self.revision = revision
             if !document.profiles.contains(where: { $0.id == self.selectedProfileID }) {
                 self.selectedProfileID = document.globalProfileID
@@ -95,6 +99,7 @@ final class StudioModel: ObservableObject {
                 self.lockedProfileID = nil
             }
             self.syncEffectiveGroup()
+            self.observeFocus()
         }
         engine.onGroupChange = { [weak self] offset in self?.queueGroupChange(offset) }
         engine.onEvent = { [weak self] in self?.record($0) }
@@ -102,13 +107,17 @@ final class StudioModel: ObservableObject {
         output.onPhysicalEditingInput = { [weak self] in
             guard let self else { return }
             self.physicalEditingEpoch &+= 1
+            self.inputAreaObserver.physicalInput()
             self.cancelNumericWork()
             if self.numericReselectionPID == NSWorkspace.shared.frontmostApplication?.processIdentifier {
                 self.numericReselectionPID = nil
                 self.onStatusChange?()
             }
         }
-        output.onPhysicalPointerDown = { [weak self] in self?.panelDiagnostics.pointerDown($0) }
+        output.onPhysicalPointerDown = { [weak self] point in
+            self?.panelDiagnostics.pointerDown(point)
+            self?.inputAreaObserver.pointerDown(point)
+        }
         output.onExternalNavigation = { [weak self] code, down, source, flags in
             guard let self, self.activeBundleID == "app.rive.editor" else { return }
             self.panelDiagnostics.note("externalNavigation", "key=\(code) \(down ? "down" : "up") source=\(source) flags=\(flags)")
@@ -122,6 +131,20 @@ final class StudioModel: ObservableObject {
             self.panelDiagnostics.note("output", event)
         }
         panelDiagnostics.onChange = { [weak self] in self?.panelInspectionStatus = $0 }
+        inputAreaObserver.shouldDeferCapture = { [weak self] in
+            guard let self else { return false }
+            return self.typedNumericJob != nil || self.focusObserver.defersAreaObservation
+        }
+        inputAreaObserver.onChange = { [weak self] area, status in
+            guard let self else { return }
+            if self.lastObservedArea != area {
+                self.cancelActions(reason: "Rive area changed")
+                self.lastObservedArea = area
+            }
+            self.inputAreaStatus = status
+            self.onStatusChange?()
+        }
+        focusObserver.onWindowChange = { [weak self] in self?.inputAreaObserver.reset() }
         focusObserver.setKeyboardOutput(output)
         device.onControl = { [weak self] control, down in self?.input(control, down: down) }
         device.onStatus = { [weak self] in self?.record($0) }
@@ -154,9 +177,17 @@ final class StudioModel: ObservableObject {
     var effectiveProfile: KeydialProfile { document.effectiveProfile(bundleIdentifier: activeBundleID, lockedProfileID: lockedProfileID)! }
     var effectiveGroup: KeydialGroup { effectiveProfile.selectedGroup ?? effectiveProfile.groups[0] }
     var currentBinding: ControlBinding { editorGroup.binding(for: selectedControl)! }
-    var activeContextRule: FocusRule? { effectiveProfile.matchingRule(for: focusedInput) }
+    private var usesAreaRules: Bool {
+        activeBundleID == "app.rive.editor" && effectiveProfile.appBundleIdentifier == activeBundleID &&
+            effectiveProfile.contextRules.contains { $0.enabled && $0.area != nil }
+    }
+    var currentInputArea: InputArea? { usesAreaRules ? inputAreaObserver.currentArea : nil }
+    var activeContextRule: FocusRule? {
+        effectiveProfile.matchingRule(for: focusedInput, area: currentInputArea)
+    }
     var focusStatus: String {
         if let rule = activeContextRule { return "Dials · \(rule.name)" }
+        if usesAreaRules { return "Dials · \(inputAreaStatus)" }
         switch focusedInput.kind {
         case .unavailable: return "Dials · app defaults"
         case .secure: return "Protected input · app defaults"
@@ -233,6 +264,7 @@ final class StudioModel: ObservableObject {
     }
     func stop() {
         panelDiagnostics.stop()
+        inputAreaObserver.configure(pid: nil, enabled: false)
         cancelActions(reason: "App closing")
         focusObserver.stop()
         output.enabled = false
@@ -315,8 +347,15 @@ final class StudioModel: ObservableObject {
         if control.isDial {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self?.activeControls.remove(control) }
         }
-        guard !IsSecureEventInputEnabled(), output.enabled,
-              let binding = effectiveProfile.binding(for: control, focus: focusedInput) else { return }
+        guard !IsSecureEventInputEnabled(), output.enabled else { return }
+        let area = currentInputArea
+        if control.isDial && usesAreaRules &&
+            effectiveProfile.matchingRule(for: focusedInput, area: area) == nil {
+            if down { record("Dial · select a recognized Rive area") }
+            return
+        }
+        guard let binding = effectiveProfile.binding(for: control, focus: focusedInput,
+                                                     area: area) else { return }
         if control.isDial && binding.dialBehavior == .smart {
             if down { smartDial(binding) }
             return
@@ -520,10 +559,13 @@ final class StudioModel: ObservableObject {
         focusObserver.observe(pid: lastForegroundPID, bundleIdentifier: activeBundleID,
             enabled: accessibilityAllowed && !secureInput && sessionAvailable && (appHasProfile || needsSmart) &&
                 activeBundleID != Bundle.main.bundleIdentifier)
+        inputAreaObserver.configure(pid: lastForegroundPID,
+            enabled: usesAreaRules && output.enabled && accessibilityAllowed && !secureInput && sessionAvailable)
     }
     private func focusChanged(_ snapshot: FocusSnapshot) {
         focusConfirmedAt = ProcessInfo.processInfo.systemUptime
         guard snapshot != focusedInput else { return }
+        inputAreaObserver.focusChanged()
         if activeBundleID == "app.rive.editor" {
             panelDiagnostics.note("focus", "\(snapshot.kind.rawValue) · \(snapshot.role ?? "unavailable")")
         }
@@ -779,10 +821,11 @@ final class StudioModel: ObservableObject {
             let current = try JSONSerialization.jsonObject(with: JSONEncoder().encode(focusedInput))
             let last: Any = try lastExternalFocus.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()
             return ["current": current, "lastObserved": last, "rivePanelDiagnostics": panelDiagnostics.read(),
+                    "area": currentInputArea?.rawValue as Any? ?? NSNull(), "areaStatus": inputAreaStatus,
                     "lastObservedAt": lastExternalFocusAt.map { ISO8601DateFormatter().string(from: $0) } as Any? ?? NSNull(),
                     "matchedRuleId": activeContextRule?.id as Any? ?? NSNull(),
                     "dialGroupId": activeContextRule?.targetGroupID ?? effectiveGroup.id,
-                    "note": "Accessibility metadata only. Field contents are not exposed here. Numeric values are read only for an explicitly configured Smart adjustment. Last observed is historical, not the current routing target."]
+                    "note": "Field contents are not exposed. Opt-in Rive area detection checks only whether focused nonsecure text is numeric; values stay inside the AX worker. Last observed is historical, not the current routing target."]
         case "runtime.get":
             guard arguments.isEmpty else { throw MCPInputError(reason: "Unexpected runtime arguments") }
             return ["revision": revision, "activeApp": activeAppName,
@@ -793,6 +836,7 @@ final class StudioModel: ObservableObject {
                                         "recentDecisions": recentDialDecisions,
                                         "recentSmartEvents": Array(recentEvents.filter { $0.hasPrefix("Smart ·") }.suffix(20))],
                     "outputStatus": outputStatus, "device": ["state": connection, "transport": transport, "ready": ready],
+                    "inputArea": currentInputArea?.rawValue as Any? ?? NSNull(), "inputAreaStatus": inputAreaStatus,
                     "permissions": ["accessibility": accessibilityAllowed, "inputMonitoring": inputAllowed, "bluetooth": bluetoothAllowed]]
         case "device.getSettings":
             guard arguments.isEmpty else { throw MCPInputError(reason: "Unexpected settings arguments") }

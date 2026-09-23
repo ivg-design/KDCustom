@@ -411,6 +411,10 @@ enum FocusKind: String, Codable, CaseIterable, Sendable {
     case unavailable, secure, numeric, text, other
 }
 
+enum InputArea: String, Codable, CaseIterable, Sendable {
+    case numeric, canvas, timeline, list
+}
+
 /// Only focus metadata used for rule selection. Field values and selected text
 /// never enter the profile document or the runtime snapshot.
 struct FocusSnapshot: Codable, Equatable, Sendable {
@@ -441,30 +445,34 @@ struct FocusRule: Codable, Equatable, Sendable {
     var enabled: Bool
     var targetGroupID: String
     var kind: FocusKind?
+    var area: InputArea?
     var role: String?
     var identifier: String?
     var labelContains: String?
 
     init(id: String = UUID().uuidString, name: String, enabled: Bool = true,
          targetGroupID: String, kind: FocusKind? = nil, role: String? = nil,
-         identifier: String? = nil, labelContains: String? = nil) {
+         identifier: String? = nil, labelContains: String? = nil,
+         area: InputArea? = nil) {
         self.id = id
         self.name = name
         self.enabled = enabled
         self.targetGroupID = targetGroupID
         self.kind = kind
+        self.area = area
         self.role = role
         self.identifier = identifier
         self.labelContains = labelContains
     }
 
     var hasCriterion: Bool {
-        kind != nil || role != nil || identifier != nil || labelContains != nil
+        kind != nil || area != nil || role != nil || identifier != nil || labelContains != nil
     }
 
-    func matches(_ snapshot: FocusSnapshot) -> Bool {
+    func matches(_ snapshot: FocusSnapshot, area observedArea: InputArea? = nil) -> Bool {
         guard enabled, snapshot.kind != .unavailable, snapshot.kind != .secure,
               hasCriterion else { return false }
+        if let area, area != observedArea { return false }
         if let kind, kind != snapshot.kind { return false }
         if let role, role != snapshot.role { return false }
         if let identifier, identifier != snapshot.identifier { return false }
@@ -502,15 +510,15 @@ struct KeydialProfile: Codable, Equatable, Sendable {
 
     /// Rule order is priority. Only an exact app profile can override its four
     /// dial bindings; the selected group's button bindings remain authoritative.
-    func matchingRule(for snapshot: FocusSnapshot) -> FocusRule? {
+    func matchingRule(for snapshot: FocusSnapshot, area: InputArea? = nil) -> FocusRule? {
         guard let appBundleIdentifier, snapshot.bundleIdentifier == appBundleIdentifier,
               snapshot.kind != .secure, snapshot.kind != .unavailable else { return nil }
-        return contextRules.first { $0.matches(snapshot) }
+        return contextRules.first { $0.matches(snapshot, area: area) }
     }
 
-    func binding(for control: ControlID, focus: FocusSnapshot) -> ControlBinding? {
+    func binding(for control: ControlID, focus: FocusSnapshot, area: InputArea? = nil) -> ControlBinding? {
         let normal = selectedGroup?.binding(for: control)
-        guard control.isDial, let rule = matchingRule(for: focus),
+        guard control.isDial, let rule = matchingRule(for: focus, area: area),
               let group = groups.first(where: { $0.id == rule.targetGroupID }) else { return normal }
         return group.binding(for: control) ?? normal
     }

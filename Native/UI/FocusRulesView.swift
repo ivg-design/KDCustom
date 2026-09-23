@@ -25,8 +25,10 @@ struct FocusRulesView: View {
             }
             observation
             if model.editorProfile.appBundleIdentifier == "app.rive.editor" {
+                Text(model.inputAreaStatus).font(StudioTheme.font(11))
+                    .foregroundStyle(StudioTheme.secondaryText)
                 HStack {
-                    Button("Inspect Rive panels · 2 minutes") { model.startPanelInspection() }
+                    Button("Inspect Rive panels · 5 minutes") { model.startPanelInspection() }
                     Button("Stop inspection") { model.stopPanelInspection() }
                     Text(model.panelInspectionStatus).font(StudioTheme.font(10))
                         .foregroundStyle(StudioTheme.secondaryText)
@@ -81,7 +83,7 @@ struct FocusRulesView: View {
                     }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            Text("Only dials change. Buttons and the default group stay the same. Unidentified controls use the app's default dial bindings. Focus matching reads metadata only; Smart mode reads numeric values when adjusting them.")
+            Text("Only dials change. Buttons and the default group stay the same. Rive area rules pause unmatched dials until a recognized area is selected. Other focus rules use the app defaults. List-area detection is not available yet.")
                 .font(StudioTheme.font(11)).foregroundStyle(StudioTheme.secondaryText)
         }
         .padding(24).frame(width: 800, height: 620)
@@ -135,10 +137,19 @@ struct FocusRulesView: View {
                 Text("Text field").tag(FocusKind.text.rawValue)
                 Text("Other control").tag(FocusKind.other.rawValue)
             }
+            Picker("Active area", selection: Binding(get: { draft?.area?.rawValue ?? "any" }, set: {
+                draft?.area = $0 == "any" ? nil : InputArea(rawValue: $0)
+            })) {
+                Text("Any").tag("any")
+                Text("Numeric field").tag(InputArea.numeric.rawValue)
+                Text("Canvas").tag(InputArea.canvas.rawValue)
+                Text("Timeline").tag(InputArea.timeline.rawValue)
+                Text("List").tag(InputArea.list.rawValue)
+            }
             TextField("Role (optional)", text: optional(\.role)).textFieldStyle(.roundedBorder)
             TextField("Exact control identifier (optional)", text: optional(\.identifier)).textFieldStyle(.roundedBorder)
             TextField("Label contains (optional)", text: optional(\.labelContains)).textFieldStyle(.roundedBorder)
-            Text("All specified conditions must match. Numeric detection uses advertised control capabilities; it does not inspect the typed value.")
+            Text("All specified conditions must match. Control type uses advertised capabilities. Rive’s Numeric field area also checks whether focused nonsecure text is a number; no value is retained. Canvas and timeline use the last click and live layout bounds.")
                 .font(StudioTheme.font(11)).foregroundStyle(StudioTheme.secondaryText)
             Picker("Use dial bindings from", selection: string(\.targetGroupID)) {
                 ForEach(Array(model.editorProfile.groups.enumerated()), id: \.element.id) { index, group in

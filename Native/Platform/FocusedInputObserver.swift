@@ -7,6 +7,8 @@ import Foundation
 @MainActor
 final class FocusedInputObserver {
     var onChange: ((FocusSnapshot) -> Void)?
+    var onWindowChange: (() -> Void)?
+    var defersAreaObservation: Bool { numericLease.defersFocusNotifications() }
 
     private var pid: pid_t?
     private var bundleIdentifier: String?
@@ -35,9 +37,10 @@ final class FocusedInputObserver {
                 self.onChange?(candidate)
             }
         }
-        worker.onFocusNotification = { [weak self] notificationGeneration in
+        worker.onFocusNotification = { [weak self] notificationGeneration, windowChanged in
             guard let self, self.generation == notificationGeneration else { return }
-            if self.numericLease.defersFocusNotifications() { return }
+            if windowChanged { self.onWindowChange?() }
+            if !windowChanged && self.numericLease.defersFocusNotifications() { return }
             self.invalidateForFocusChange()
         }
     }
@@ -129,7 +132,7 @@ private final class FocusAXNotificationContext {
 
 private final class FocusAXWorker: @unchecked Sendable {
     var onResult: (@Sendable (UInt64, UInt64, FocusSnapshot) -> Void)?
-    var onFocusNotification: (@MainActor @Sendable (UInt64) -> Void)?
+    var onFocusNotification: (@MainActor @Sendable (UInt64, Bool) -> Void)?
 
     private let queue = DispatchQueue(label: "Keydial.FocusedInputAX", qos: .utility)
     private let numericLease: NumericAdjustmentLease
@@ -492,10 +495,11 @@ private final class FocusAXWorker: @unchecked Sendable {
 
     private func installObserver(on app: AXUIElement, pid: pid_t) {
         var created: AXObserver?
-        let callback: AXObserverCallback = { _, _, _, context in
+        let callback: AXObserverCallback = { _, _, notification, context in
             guard let context else { return }
             let payload = Unmanaged<FocusAXNotificationContext>.fromOpaque(context).takeUnretainedValue()
-            MainActor.assumeIsolated { payload.worker?.onFocusNotification?(payload.generation) }
+            let windowChanged = notification == kAXFocusedWindowChangedNotification as CFString
+            MainActor.assumeIsolated { payload.worker?.onFocusNotification?(payload.generation, windowChanged) }
         }
         guard AXObserverCreate(pid, callback, &created) == .success,
               let created else { return }
@@ -509,6 +513,7 @@ private final class FocusAXWorker: @unchecked Sendable {
             Unmanaged<FocusAXNotificationContext>.fromOpaque(context).release()
             return
         }
+        _ = AXObserverAddNotification(created, app, kAXFocusedWindowChangedNotification as CFString, context)
         observer = created
         notificationContext = context
         let source = AXObserverGetRunLoopSource(created)
@@ -523,6 +528,7 @@ private final class FocusAXWorker: @unchecked Sendable {
         // keeps the callback context alive until delivery is impossible.
         _ = AXObserverRemoveNotification(observer, app,
                                          kAXFocusedUIElementChangedNotification as CFString)
+        _ = AXObserverRemoveNotification(observer, app, kAXFocusedWindowChangedNotification as CFString)
         let source = AXObserverGetRunLoopSource(observer)
         let context = notificationContext
         notificationContext = nil

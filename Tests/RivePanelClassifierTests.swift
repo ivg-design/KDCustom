@@ -36,6 +36,11 @@ enum RivePanelClassifierTests {
               RiveChromeAnchor.recognizeLines("Scene Stage 100%", role: .staticText).isEmpty,
               "editable and mixed user text is never interpreted as zoom chrome")
 
+        check(RiveChromeAnchor.recognizeLines("0°   2684%", role: .staticText) == [.zoomReadout] &&
+              RiveChromeAnchor.recognizeLines("00:00:28", role: .staticText) == [.timeReadout] &&
+              RiveChromeAnchor.recognizeLines("00:00:28", role: .textArea).isEmpty,
+              "combined zoom and time chrome retain only tokens, never editable values")
+
         let stage = [
             node(0, nil, .other, window),
             node(1, 0, .group, CGRect(x: 200, y: 100, width: 650, height: 500)),
@@ -49,6 +54,17 @@ enum RivePanelClassifierTests {
         let stageHitOnly = classify(snapshot(stage, focus: 0, hit: 4, at: 10))
         check(stageHitOnly.lastInteractedPanel == .canvas && stageHitOnly.automaticPanel == nil,
               "click-only canvas evidence is diagnostic, not an automatic route")
+        var windowHit = snapshot(stage, focus: 0, hit: 0, at: 10)
+        windowHit.interactionPoint = CGPoint(x: 500, y: 300)
+        let pointDecision = classify(windowHit)
+        check(pointDecision.lastInteractedPanel == .canvas && pointDecision.automaticPanel == nil,
+              "window-level AX hit can expose a diagnostic local click candidate without routing")
+        windowHit.interactionPoint = CGPoint(x: 50, y: 300)
+        check(classify(windowHit).lastInteractedPanel == nil,
+              "click outside anchored pane cannot inherit its route")
+        windowHit.interactionPoint = CGPoint(x: 500, y: 300)
+        check(classify(windowHit, now: 11).lastInteractedPanel == nil,
+              "stale click coordinates do not classify")
         check(classify(snapshot(Array(stage.dropLast()), focus: 1)).automaticPanel == .canvas,
               "a focused bounded Stage container can identify canvas")
 

@@ -116,6 +116,25 @@ enum MCPTests {
         ])))
         check(focusResult?["isError"] as? Bool == false && calls.last?.0 == "contextRules.set",
               "complete focus rule reaches the shared configuration handler")
+        let setFocusTool = listed?.first { $0["name"] as? String == "kdcustom_set_context_rule" }
+        let ruleSchema = ((setFocusTool?["inputSchema"] as? [String: Any])?["properties"] as? [String: Any])?["rule"] as? [String: Any]
+        let areaSchema = (ruleSchema?["properties"] as? [String: Any])?["area"] as? [String: Any]
+        check(Set(areaSchema?["enum"] as? [String] ?? []) == Set(InputArea.allCases.map(\.rawValue)),
+              "MCP schema advertises only supported active areas")
+        var areaRule = focusRule
+        areaRule.removeValue(forKey: "kind")
+        areaRule.removeValue(forKey: "role")
+        areaRule["area"] = "timeline"
+        check(result(send(server, call(63, "kdcustom_set_context_rule", [
+            "expectedRevision": "r1", "profileId": "editor", "rule": areaRule
+        ])))?["isError"] as? Bool == false && calls.last?.0 == "contextRules.set",
+              "MCP accepts a valid area-only rule")
+        let beforeUnknownArea = calls.count
+        areaRule["area"] = "unknown"
+        check(result(send(server, call(64, "kdcustom_set_context_rule", [
+            "expectedRevision": "r1", "profileId": "editor", "rule": areaRule
+        ])))?["isError"] as? Bool == true && calls.count == beforeUnknownArea,
+              "MCP rejects an unknown active area before app dispatch")
         var malformedRule = focusRule
         malformedRule["fieldValue"] = "123456"
         let beforeMalformedRule = calls.count

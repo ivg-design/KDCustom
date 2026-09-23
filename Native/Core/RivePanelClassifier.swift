@@ -17,6 +17,7 @@ enum RiveAXRole: Equatable, Sendable {
 enum RiveChromeAnchor: String, Hashable, Sendable {
     case hierarchy, timeline, animations, current, duration, snapKeys, playbackSpeed
     case stage, zoomReadout
+    case timeReadout, allKeys, console, problems
     case designBackground, animateBackground, defaultInterpolation, scripting
     case computedTransform, constraints, drawOrder, blend
 
@@ -25,6 +26,16 @@ enum RiveChromeAnchor: String, Hashable, Sendable {
             let normalized = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: ":"))
                 .lowercased()
+            if role == .staticText, normalized.count <= 24,
+               normalized.range(of: #"^(?:-?[0-9]+(?:\.[0-9]+)?°\s+)?[0-9]+(?:\.[0-9]+)?%$"#,
+                                options: .regularExpression) != nil {
+                return .zoomReadout
+            }
+            if role == .staticText, normalized.count <= 14,
+               normalized.range(of: #"^[0-9]{1,3}:[0-9]{2}:[0-9]{2}$"#,
+                                options: .regularExpression) != nil {
+                return .timeReadout
+            }
             if role == .staticText, normalized.count <= 8, normalized.hasSuffix("%"),
                let number = Double(normalized.dropLast()), number.isFinite,
                (1...3200).contains(number) {
@@ -44,6 +55,9 @@ enum RiveChromeAnchor: String, Hashable, Sendable {
         case "snap keys": return .snapKeys
         case "playback speed": return .playbackSpeed
         case "stage": return .stage
+        case "all keys": return .allKeys
+        case "console": return .console
+        case "problems": return .problems
         case "design background": return .designBackground
         case "animate background": return .animateBackground
         case "default interpolation": return .defaultInterpolation
@@ -56,11 +70,13 @@ enum RiveChromeAnchor: String, Hashable, Sendable {
         }
     }
 
-    var panel: RivePanelKind {
+    var panel: RivePanelKind? {
         switch self {
         case .hierarchy: return .hierarchy
-        case .timeline, .animations, .current, .duration, .snapKeys, .playbackSpeed: return .timeline
+        case .timeline, .animations, .current, .duration, .snapKeys, .playbackSpeed,
+             .timeReadout, .allKeys: return .timeline
         case .stage, .zoomReadout: return .canvas
+        case .console, .problems: return nil
         case .designBackground, .animateBackground, .defaultInterpolation, .scripting,
              .computedTransform, .constraints, .drawOrder, .blend: return .inspector
         }
@@ -87,6 +103,10 @@ struct RivePanelSnapshot: Sendable {
     let interactionAt: TimeInterval?
     let nodes: [RivePanelNode]
     let truncated: Bool
+    var interactionPoint: CGPoint? = nil
+    var focusedElementKey: UInt64? = nil
+    var editableTextFocused = false
+    var numericTextFocused = false
 }
 
 enum RivePanelConfidence: Equatable, Sendable {
@@ -128,7 +148,13 @@ enum RivePanelClassifier {
         let interactedMatch: PanelMatch?
         if let at = snapshot.interactionAt, now >= at,
            now - at <= interactionLifetime {
-            interactedMatch = panel(at: snapshot.hitNodeID, in: snapshot, window: window)
+            if let point = snapshot.interactionPoint, window.contains(point),
+               point.x.isFinite, point.y.isFinite {
+                interactedMatch = panel(at: snapshot.hitNodeID, in: snapshot, window: window,
+                    targetFrameOverride: CGRect(x: point.x, y: point.y, width: 0.1, height: 0.1))
+            } else {
+                interactedMatch = panel(at: snapshot.hitNodeID, in: snapshot, window: window)
+            }
         } else {
             interactedMatch = nil
         }
@@ -168,9 +194,10 @@ enum RivePanelClassifier {
     }
 
     private static func panel(at nodeID: Int?, in snapshot: RivePanelSnapshot,
-                              window: CGRect) -> PanelMatch? {
+                              window: CGRect, targetFrameOverride: CGRect? = nil) -> PanelMatch? {
         guard let nodeID, let target = snapshot.nodes.first(where: { $0.id == nodeID }),
-              let targetFrame = target.frame, valid(targetFrame), window.contains(targetFrame) else {
+              let targetFrame = targetFrameOverride ?? target.frame,
+              valid(targetFrame), window.contains(targetFrame) else {
             return nil
         }
         let byID = Dictionary(uniqueKeysWithValues: snapshot.nodes.map { ($0.id, $0) })
@@ -229,7 +256,7 @@ enum RivePanelClassifier {
         }
         let descendants = nodes.filter { isDescendant($0.id) }
         let anchors = Set(descendants.flatMap(\.anchors))
-        let panels = Set(anchors.map(\.panel))
+        let panels = Set(anchors.compactMap(\.panel))
         guard panels.count == 1, let panel = panels.first else { return nil }
         switch panel {
         case .hierarchy:

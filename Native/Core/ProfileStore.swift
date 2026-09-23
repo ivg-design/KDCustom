@@ -138,7 +138,7 @@ struct ProfileStore {
                     throw invalid("focus rule \(rule.id) targets a missing group")
                 }
                 guard rule.hasCriterion else {
-                    throw invalid("focus rule \(rule.id) needs a kind, role, identifier, or label criterion")
+                    throw invalid("focus rule \(rule.id) needs an area, kind, role, identifier, or label criterion")
                 }
                 if let kind = rule.kind, kind == .secure || kind == .unavailable {
                     throw invalid("focus rule \(rule.id) cannot target a secure or unavailable field")

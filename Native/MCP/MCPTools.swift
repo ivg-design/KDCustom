@@ -115,7 +115,7 @@ enum MCPTools {
              "Read active app, effective profile, device connection, and permissions as observed by the app.",
              empty, readOnly: true),
         tool("kdcustom_get_focused_input", "runtime.focus", "Get focused input",
-             "Read focus metadata without field values. Optional panelCapture starts a two-minute in-memory Rive AX/click diagnostic or stops it; results are historical, never automatic routes.",
+             "Read focus metadata without field values. Opt-in Rive area detection checks whether focused nonsecure text is numeric without returning its value. Optional panelCapture starts a five-minute in-memory Rive AX/click diagnostic or stops it; results are historical, never automatic routes.",
              object(["panelCapture": ["type": "string", "enum": ["start", "stop"]]], required: []), readOnly: true),
         tool("kdcustom_get_device_settings", "device.getSettings", "Get observed device settings",
              "Read cached settings with availability and observation time; unavailable is distinct from zero.",
@@ -295,7 +295,7 @@ enum MCPTools {
 
     private static func validateFocusRule(_ object: [String: Any]) throws {
         let required: Set<String> = ["id", "name", "enabled", "targetGroupID"]
-        let allowed = required.union(["kind", "role", "identifier", "labelContains"])
+        let allowed = required.union(["kind", "area", "role", "identifier", "labelContains"])
         guard required.isSubset(of: Set(object.keys)), Set(object.keys).isSubset(of: allowed),
               JSONSerialization.isValidJSONObject(object) else {
             throw MCPInputError(reason: "Focus rule has missing or unexpected fields")
@@ -428,6 +428,7 @@ enum MCPTools {
         "enabled": ["type": "boolean"],
         "targetGroupID": ["type": "string", "minLength": 1, "maxLength": 80],
         "kind": ["type": "string", "enum": ["numeric", "text", "other"]],
+        "area": ["type": "string", "enum": InputArea.allCases.map(\.rawValue)],
         "role": ["type": "string", "minLength": 1, "maxLength": 128],
         "identifier": ["type": "string", "minLength": 1, "maxLength": 256],
         "labelContains": ["type": "string", "minLength": 1, "maxLength": 160]
