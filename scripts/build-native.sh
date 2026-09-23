@@ -31,9 +31,9 @@ app,root=map(Path,sys.argv[1:])
 info={'CFBundleIdentifier':'life.mograph.KeydialStudio',
 'CFBundleName':'KDCustom','CFBundleDisplayName':'KDCustom',
 'CFBundleExecutable':'KeydialStudio','CFBundlePackageType':'APPL',
-'CFBundleShortVersionString':'0.5.0','CFBundleVersion':'12',
+'CFBundleShortVersionString':'0.5.0','CFBundleVersion':'14',
 'LSMinimumSystemVersion':'14.0','NSPrincipalClass':'NSApplication',
-'NSHighResolutionCapable':True,'CFBundleIconFile':'AppIcon','ProbeRepositoryPath':str(root),
+'NSHighResolutionCapable':True,'CFBundleIconFile':'AppIcon.icns','ProbeRepositoryPath':str(root),
 'NSBluetoothAlwaysUsageDescription':'Connect to your Huion Keydial for button, dial, and screen control.'}
 (app/'Contents/Info.plist').write_bytes(plistlib.dumps(info))
 PY
@@ -45,6 +45,12 @@ fi
 codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 if [[ " ${*:-} " == *" --install "* ]]; then
+  if pgrep -f '^/Applications/Keydial Studio.app/Contents/MacOS/KeydialStudio$' >/dev/null; then
+    printf '%s\n' 'Quit KDCustom before installing the update.' >&2
+    exit 1
+  fi
   ditto "$APP" '/Applications/Keydial Studio.app'
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -f '/Applications/Keydial Studio.app'
 fi
 printf '%s\n' "$APP"

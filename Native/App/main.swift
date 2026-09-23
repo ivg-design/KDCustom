@@ -28,6 +28,12 @@ final class StudioDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             existing.activate(options: [.activateAllWindows])
             NSApp.terminate(nil); return
         }
+        // A manually installed update can retain the prototype's generic Dock icon.
+        // Load the signed bundle resource directly instead of relying on that cache.
+        if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let icon = NSImage(contentsOf: iconURL) {
+            NSApp.applicationIconImage = icon
+        }
         do { model = try StudioModel() }
         catch {
             let alert = NSAlert(); alert.messageText = "Profiles could not be opened"
@@ -146,7 +152,13 @@ final class StudioDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func togglePause() { model?.paused.toggle() }
     @objc private func reconnect() { model?.reconnect() }
     @objc private func about() {
-        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "KDCustom", .credits: NSAttributedString(string: "Native control for Huion Keydial Remote K40\nIndependent project · ivg-design/KDCustom")])
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [
+            .applicationName: "KDCustom",
+            .credits: NSAttributedString(string: "Native control for Huion Keydial Remote K40\nIndependent project · ivg-design/KDCustom")
+        ]
+        // The About panel otherwise uses a separate, cached NSApplicationIcon.
+        if let icon = NSApp.applicationIconImage { options[.applicationIcon] = icon }
+        NSApp.orderFrontStandardAboutPanel(options: options)
     }
     @objc private func quit() { NSApp.terminate(nil) }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showWindow(); return true }
