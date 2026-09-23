@@ -28,6 +28,7 @@ final class StudioModel: ObservableObject {
     @Published private(set) var huionRunning = false
     @Published private(set) var deviceSettings: [String: String] = [:]
     @Published private(set) var recentEvents: [String] = []
+    private var recentDialDecisions: [[String: Any]] = []
     @Published var errorMessage: String?
     @Published var showingSettings = false
     @Published var showingContextRules = false
@@ -261,13 +262,18 @@ final class StudioModel: ObservableObject {
     }
     private func smartDial(_ binding: ControlBinding) {
         engine.prepareSmartDial(binding.controlID)
+        let modifiers = output.physicalModifiers
         guard let settings = binding.smart,
-              let choice = settings.selection(for: output.physicalModifiers) else {
+              let choice = settings.selection(for: modifiers) else {
             focusObserver.cancelNumericAdjustments()
+            recordDialDecision(binding.controlID, modifiers: modifiers, shortcut: nil, result: "No matching modifier rule")
             return
         }
         if let shortcut = choice.shortcut {
-            record(output.smartShortcut(shortcut) ? "Smart · custom shortcut sent" : "Smart · shortcut unavailable")
+            let sent = output.smartShortcut(shortcut)
+            recordDialDecision(binding.controlID, modifiers: modifiers, shortcut: shortcut,
+                               result: sent ? "Shortcut sent" : "Shortcut unavailable")
+            record(sent ? "Smart · custom shortcut sent" : "Smart · shortcut unavailable")
             return
         }
         let focus = focusedInput
@@ -304,6 +310,14 @@ final class StudioModel: ObservableObject {
             case .failed: self.record("Smart · app did not confirm adjustment; no fallback sent")
             }
         }
+    }
+    private func recordDialDecision(_ control: ControlID, modifiers: KeyModifiers, shortcut: SmartShortcut?, result: String) {
+        recentDialDecisions.append(["control": control.rawValue, "selectorModifiers": modifiers.rawValue,
+                                   "keyCode": shortcut?.keyCode as Any? ?? NSNull(),
+                                   "outputModifiers": shortcut?.modifiers.rawValue as Any? ?? NSNull(),
+                                   "result": result, "profileId": effectiveProfile.id,
+                                   "at": ISO8601DateFormatter().string(from: Date())])
+        if recentDialDecisions.count > 8 { recentDialDecisions.removeFirst() }
     }
     private func queueGroupChange(_ offset: Int) {
         if let pending = queuedGroupChange, pending.profile == effectiveProfile.id, pending.revision == revision {
@@ -621,6 +635,7 @@ final class StudioModel: ObservableObject {
                     "activeBundleIdentifier": activeBundleID as Any? ?? NSNull(),
                     "effectiveProfileId": effectiveProfile.id, "effectiveGroupId": effectiveGroup.id,
                     "lockedProfileId": lockedProfileID as Any? ?? NSNull(), "paused": paused,
+                    "dialDiagnostics": ["physicalModifiers": output.physicalModifiers.rawValue, "recentDecisions": recentDialDecisions],
                     "outputStatus": outputStatus, "device": ["state": connection, "transport": transport, "ready": ready],
                     "permissions": ["accessibility": accessibilityAllowed, "inputMonitoring": inputAllowed, "bluetooth": bluetoothAllowed]]
         case "device.getSettings":

@@ -45,8 +45,7 @@ final class SystemActionOutput: ActionOutput {
                     if type == .keyDown { owner.physical.key(code, down: true, posted: false) }
                     if type == .keyUp { owner.physical.key(code, down: false, posted: false) }
                     if type == .flagsChanged {
-                        // HID state distinguishes left/right modifiers sharing one aggregate flag.
-                        owner.physical.key(code, down: CGEventSource.keyState(.hidSystemState, key: code), posted: false)
+                        owner.physical.modifier(code, flags: event.flags.rawValue)
                     }
                     if [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
                         .otherMouseDown, .otherMouseUp].contains(type) {
@@ -92,10 +91,15 @@ final class SystemActionOutput: ActionOutput {
         }
         // Caps lock is a toggle, not an owned hold.
         if CGEventSource.flagsState(.hidSystemState).contains(.maskAlphaShift) { flags.insert(.maskAlphaShift) }
-        return flags
+        let sides = MacModifierFlags.encode(KeyModifiers(rawValue: flags.rawValue).intersection(.supported), heldKeys: physical.keys)
+        return flags.union(CGEventFlags(rawValue: sides))
     }
-    private func flags(_ modifiers: KeyModifiers) -> CGEventFlags {
-        CGEventFlags(rawValue: modifiers.rawValue).union(physicalFlags)
+    private func flags(_ modifiers: KeyModifiers, changingKey: UInt16? = nil, down: Bool = false) -> CGEventFlags {
+        var held = physical.postedKeys
+        if let changingKey {
+            if down { held.insert(changingKey) } else { held.remove(changingKey) }
+        }
+        return CGEventFlags(rawValue: MacModifierFlags.encode(modifiers, heldKeys: held)).union(physicalFlags)
     }
 
     var physicalModifiers: KeyModifiers {
@@ -108,7 +112,7 @@ final class SystemActionOutput: ActionOutput {
     func smartShortcut(_ shortcut: SmartShortcut) -> Bool {
         guard enabled, !physicalKeyIsDown(shortcut.keyCode),
               ![54, 55, 56, 58, 59, 60, 61, 62, 63].contains(shortcut.keyCode) else { return false }
-        let exact = CGEventFlags(rawValue: shortcut.modifiers.rawValue)
+        let exact = CGEventFlags(rawValue: MacModifierFlags.encode(shortcut.modifiers))
             .union(physicalFlags.intersection(.maskAlphaShift))
         for _ in 0..<shortcut.repeatCount {
             guard !physicalKeyIsDown(shortcut.keyCode) else { return false }
@@ -150,7 +154,7 @@ final class SystemActionOutput: ActionOutput {
     @discardableResult
     func key(code: UInt16, down: Bool, modifiers: KeyModifiers) -> Bool {
         let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)
-        event?.flags = flags(modifiers)
+        event?.flags = flags(modifiers, changingKey: code, down: down)
         if [54, 55, 56, 58, 59, 60, 61, 62, 63].contains(code) { event?.type = .flagsChanged }
         return post(event, summary: "Key \(code) \(down ? "down" : "up")", release: !down)
     }

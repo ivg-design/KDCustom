@@ -18,6 +18,7 @@ CORE=(Native/Core/Models.swift Native/Core/ProfileStore.swift)
 run ProfileStore "${CORE[@]}"
 run ActionEngine Native/Core/Models.swift Native/Core/ActionEngine.swift
 run PhysicalInputState Native/Core/PhysicalInputState.swift
+run MacModifierFlags Native/Core/Models.swift Native/Core/MacModifierFlags.swift
 run FocusContext "${CORE[@]}"
 run SmartDial "${CORE[@]}" Native/MCP/MCPTools.swift
 run SmartHeuristics Native/Core/Models.swift Native/Core/SmartDialHeuristics.swift

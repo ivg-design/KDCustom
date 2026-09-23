@@ -17,6 +17,7 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         let command: Bool
         let shift: Bool
         let option: Bool
+        let modifierSides: UInt64
     }
 
     private struct ObservedEvent: Codable {
@@ -25,9 +26,10 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         let command: Bool
         let shift: Bool
         let option: Bool
+        let modifierSides: UInt64
         let seconds: Double
 
-        var signature: EventSignature { .init(kind: kind, code: code, command: command, shift: shift, option: option) }
+        var signature: EventSignature { .init(kind: kind, code: code, command: command, shift: shift, option: option, modifierSides: modifierSides) }
     }
 
     private struct CheckResult: Codable {
@@ -72,7 +74,8 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
 
         var expected: [EventSignature] {
             func e(_ kind: String, _ code: UInt16, _ command: Bool = false, shift: Bool = false, option: Bool = false) -> EventSignature {
-                .init(kind: kind, code: code, command: command, shift: shift, option: option)
+                .init(kind: kind, code: code, command: command, shift: shift, option: option,
+                      modifierSides: (command ? 0x08 : 0) | (shift ? 0x02 : 0) | (option ? 0x20 : 0))
             }
             switch self {
             case .commandUp:
@@ -213,10 +216,11 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         recovery.enabled = true
         for code in stuck { recovery.key(code: code, down: false, modifiers: []) }
         recovery.enabled = false
-        append("Reset \(stuck.count) test keys. Physical keyboard keys must be released before resetting.")
+        append(stuck.isEmpty ? "No stuck test keys." : "Cleared \(stuck.count) stuck test keys.")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             self?.onRecoveredKeyState?()
-            self?.statusLabel?.stringValue = "Test key state reset · ready to run"
+            let remaining = self?.testedCodes.filter { CGEventSource.keyState(.hidSystemState, key: $0) } ?? []
+            self?.statusLabel?.stringValue = remaining.isEmpty ? "No stuck test keys · ready to run" : "Some test keys are still held"
         }
     }
 
@@ -389,9 +393,10 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
                                  command: event.modifierFlags.contains(.command),
                                  shift: event.modifierFlags.contains(.shift),
                                  option: event.modifierFlags.contains(.option),
+                                 modifierSides: UInt64(event.modifierFlags.rawValue) & MacModifierFlags.sideMask,
                                  seconds: ProcessInfo.processInfo.systemUptime - caseStart)
         observed.append(item)
-        append("  \(kind) · key \(item.code) · Command \(item.command ? "on" : "off")")
+        append("  \(kind) · key \(item.code) · Command \(item.command ? "on" : "off") · sides 0x\(String(item.modifierSides, radix: 16))")
     }
 
     private func stop(detail: String?) {

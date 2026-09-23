@@ -125,36 +125,75 @@ struct StudioRootView: View {
 
     private var workspace: some View {
         GeometryReader { geometry in
-            if portrait {
-                HStack(spacing: 0) {
-                    devicePreview
-                        .padding(20)
-                        .frame(width: max(300, geometry.size.width * 0.43))
-                        .frame(maxHeight: .infinity)
-                    Divider().overlay(StudioTheme.divider)
-                    VStack(spacing: 0) {
-                        VStack(alignment: .leading, spacing: 18) {
-                            profileHeader
-                            groupSelector
-                            accessNotice
-                        }.padding(22)
+            VStack(spacing: 0) {
+                HStack(spacing: 24) {
+                    profileHeader
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("GROUP NAME").font(StudioTheme.font(9, weight: .medium)).tracking(1)
+                            .foregroundStyle(StudioTheme.mutedText)
+                        TextField("Group name", text: $groupName, onCommit: { model.renameGroup(groupName) })
+                            .textFieldStyle(.plain).font(StudioTheme.font(13, weight: .medium))
+                    }.frame(width: 170)
+                }.padding(.horizontal, 20).padding(.vertical, 12)
+                Divider().overlay(StudioTheme.divider)
+                accessNotice
+                if portrait {
+                    HStack(spacing: 0) {
+                        groupSelector.padding(.horizontal, 10)
+                        devicePreview.frame(width: min(260, max(190, geometry.size.width * 0.24)))
+                            .padding(.vertical, 16)
+                        dialSelector.frame(width: 116).padding(.horizontal, 10)
                         Divider().overlay(StudioTheme.divider)
                         inspector
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else {
-                VStack(spacing: 0) {
-                    HStack(alignment: .center, spacing: 30) {
-                        profileHeader.frame(maxWidth: .infinity, alignment: .leading)
-                        groupSelector.frame(width: min(400, geometry.size.width * 0.44))
-                    }.padding(.horizontal, 24).padding(.vertical, 18)
-                    devicePreview
-                        .padding(.horizontal, 24).padding(.bottom, 14)
-                        .frame(height: min(geometry.size.height * 0.49, geometry.size.width * 0.476 + 65))
+                    }
+                } else {
+                    HStack(spacing: 16) {
+                        groupSelector
+                        devicePreview
+                        dialSelector.frame(width: 146)
+                    }
+                    .padding(.horizontal, 18).padding(.vertical, 10)
+                    .frame(height: min(250, max(225, geometry.size.height * 0.31)))
                     Divider().overlay(StudioTheme.divider)
-                    accessNotice
                     inspector
                 }
+            }
+        }
+    }
+
+    private var dialSelector: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            dialControls("INNER · 1", controls: [.dial1CCW, .dial1CW])
+            dialControls("OUTER · 2", controls: [.dial2CCW, .dial2CW])
+        }
+    }
+
+    private func dialControls(_ title: String, controls: [ControlID]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(StudioTheme.font(9, weight: .bold)).tracking(1)
+                .foregroundStyle(StudioTheme.secondaryText)
+            ForEach(controls, id: \.self) { control in
+                let clockwise = control == .dial1CW || control == .dial2CW
+                let selected = model.selectedControl == control
+                let label = model.editorGroup.binding(for: control)?.label ?? ""
+                Button { model.selectedControl = control } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: clockwise ? "arrow.clockwise" : "arrow.counterclockwise")
+                            .font(.system(size: 18, weight: .medium)).frame(width: 20)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(clockwise ? "CW" : "CCW").font(StudioTheme.font(11, weight: .medium))
+                            Text(label.isEmpty ? "Unassigned" : label).font(StudioTheme.font(10))
+                                .foregroundStyle(selected ? StudioTheme.accent : StudioTheme.secondaryText).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }.padding(.horizontal, 8).frame(height: 39)
+                        .background(selected ? StudioTheme.accentSoft : StudioTheme.panelRaised,
+                                    in: RoundedRectangle(cornerRadius: 5))
+                        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(
+                            model.activeControls.contains(control) ? StudioTheme.accent : .clear))
+                        .foregroundStyle(selected ? StudioTheme.accent : StudioTheme.text)
+                }.buttonStyle(.plain).help("\(title) \(clockwise ? "clockwise" : "counterclockwise"): \(label)")
+                    .accessibilityLabel("\(title) \(clockwise ? "clockwise" : "counterclockwise"), \(label)")
             }
         }
     }
@@ -168,7 +207,7 @@ struct StudioRootView: View {
                     Button("Back to default") { model.editingContextGroupID = nil }
                 }.font(StudioTheme.font(11)).foregroundStyle(StudioTheme.accent).padding(10)
             }
-            BindingDraftEditor(binding: model.currentBinding, wide: !portrait, save: model.saveBinding)
+            BindingDraftEditor(binding: model.currentBinding, wide: true, save: model.saveBinding)
                 .id(model.selectedProfileID + "/" + model.editorGroup.id + "/" + model.selectedControl.rawValue)
         }
     }
@@ -184,7 +223,7 @@ struct StudioRootView: View {
             labels: Dictionary(uniqueKeysWithValues: labels),
             groupName: preview.name,
             groupNumber: (model.editorProfile.groups.firstIndex(where: { $0.id == preview.id }) ?? 0) + 1,
-            orientationDegrees: model.orientationDegrees, batteryPercent: model.batteryBucket,
+            orientationDegrees: model.orientationDegrees, batteryPercent: model.batteryBucket, showDirectionControls: false,
             connection: model.ready ? model.transport : nil, onSelect: {
                 if model.editingContextGroupID != nil && !$0.isDial { model.editingContextGroupID = nil }
                 model.selectedControl = $0
@@ -195,7 +234,7 @@ struct StudioRootView: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 7) {
                 TextField("Profile name", text: $profileName, onCommit: { model.renameProfile(profileName) })
-                    .font(StudioTheme.font(26, weight: .light)).textFieldStyle(.plain)
+                    .font(StudioTheme.font(21, weight: .medium)).textFieldStyle(.plain)
                 Text(model.editorProfile.appBundleIdentifier ?? "Default controls for applications without their own profile")
                     .font(StudioTheme.font(11)).foregroundStyle(StudioTheme.secondaryText).lineLimit(2)
             }
@@ -208,29 +247,19 @@ struct StudioRootView: View {
     }
 
     private var groupSelector: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 5) {
-                ForEach(Array(model.editorProfile.groups.enumerated()), id: \.element.id) { index, group in
-                    Button { model.selectGroup(group.id) } label: {
-                        Text("\(index + 1)").font(StudioTheme.font(14, weight: .medium))
-                            .frame(maxWidth: .infinity).frame(height: 34)
-                            .background(group.id == model.editorGroup.id ? StudioTheme.accentSoft : StudioTheme.panel,
-                                        in: RoundedRectangle(cornerRadius: 5))
-                            .foregroundStyle(group.id == model.editorGroup.id ? StudioTheme.accent : StudioTheme.secondaryText)
-                    }.buttonStyle(.plain).help(group.name).accessibilityLabel("Group \(index + 1), \(group.name)")
-                }
+        VStack(spacing: 4) {
+            Text("GROUP").font(StudioTheme.font(8, weight: .bold)).tracking(0.8)
+                .foregroundStyle(StudioTheme.secondaryText).padding(.bottom, 3)
+            ForEach(Array(model.editorProfile.groups.enumerated()), id: \.element.id) { index, group in
+                Button { model.selectGroup(group.id) } label: {
+                    Text("\(index + 1)").font(StudioTheme.font(13, weight: .medium))
+                        .frame(width: 38, height: 27)
+                        .background(group.id == model.editorGroup.id ? StudioTheme.accentSoft : StudioTheme.panel,
+                                    in: RoundedRectangle(cornerRadius: 5))
+                        .foregroundStyle(group.id == model.editorGroup.id ? StudioTheme.accent : StudioTheme.secondaryText)
+                }.buttonStyle(.plain).help(group.name).accessibilityLabel("Group \(index + 1), \(group.name)")
             }
-            HStack {
-                Text("GROUP").font(StudioTheme.font(9, weight: .medium)).tracking(1.4).foregroundStyle(StudioTheme.mutedText)
-                TextField("Group name", text: $groupName, onCommit: { model.renameGroup(groupName) })
-                    .textFieldStyle(.plain).font(StudioTheme.font(13, weight: .medium))
-                if model.editingContextGroupID != nil {
-                    Text("CONTEXT DIALS").font(StudioTheme.font(9, weight: .medium)).foregroundStyle(StudioTheme.accent)
-                } else if model.editorProfile.id == model.effectiveProfile.id {
-                    Text("ACTIVE").font(StudioTheme.font(9, weight: .medium)).tracking(1).foregroundStyle(StudioTheme.accent)
-                }
-            }
-        }
+        }.frame(width: 42)
     }
 
     @ViewBuilder

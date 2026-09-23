@@ -13,6 +13,7 @@ struct DeviceIllustration: View {
     let orientationDegrees: Int
     let batteryPercent: Int?
     let connection: String?
+    let showDirectionControls: Bool
     let onSelect: (ControlID) -> Void
 
     @State private var hoveredControl: ControlID?
@@ -24,7 +25,7 @@ struct DeviceIllustration: View {
 
     init(selectedControl: ControlID?, activeControls: Set<ControlID>, labels: [ControlID: String],
          groupName: String, groupNumber: Int = 1, orientationDegrees: Int = 180,
-         batteryPercent: Int? = nil, connection: String? = nil,
+         batteryPercent: Int? = nil, showDirectionControls: Bool = true, connection: String? = nil,
          onSelect: @escaping (ControlID) -> Void) {
         self.selectedControl = selectedControl
         self.activeControls = activeControls
@@ -34,6 +35,7 @@ struct DeviceIllustration: View {
         self.orientationDegrees = orientationDegrees
         self.batteryPercent = batteryPercent
         self.connection = connection
+        self.showDirectionControls = showDirectionControls
         self.onSelect = onSelect
     }
 
@@ -64,7 +66,7 @@ struct DeviceIllustration: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            ViewThatFits(in: .horizontal) {
+            if showDirectionControls { ViewThatFits(in: .horizontal) {
                 HStack(spacing: 22) {
                     directions("INNER · 1", cw: .dial1CW, ccw: .dial1CCW)
                     directions("OUTER · 2", cw: .dial2CW, ccw: .dial2CCW)
@@ -75,6 +77,7 @@ struct DeviceIllustration: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
     }
 
@@ -227,28 +230,42 @@ struct DeviceIllustration: View {
         let selected = selectedControl == .dial2CW || selectedControl == .dial2CCW
         let active = activeControls.contains(.dial2CW) || activeControls.contains(.dial2CCW)
         return Button { onSelect(.dial2CW) } label: {
-            shape.fill(active ? StudioTheme.accent.opacity(0.15) : .clear, style: FillStyle(eoFill: true))
-                .overlay(shape.stroke(selected || hoveredControl == .dial2CW ? StudioTheme.accent : .clear,
-                                      lineWidth: selected ? 2 : 1.5))
+            shape.fill(selected || active ? StudioTheme.accent.opacity(active ? 0.35 : 0.20) : .clear, style: FillStyle(eoFill: true))
+                .overlay(Circle().inset(by: 3).strokeBorder(selected || hoveredControl == .dial2CW ? StudioTheme.accent : .clear,
+                                      lineWidth: selected ? 5 : 2))
+                .overlay(alignment: .top) {
+                    if selected {
+                        Text("OUTER · 2").font(StudioTheme.font(13, weight: .bold))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(StudioTheme.accent, in: Capsule()).foregroundStyle(StudioTheme.canvas)
+                            .rotationEffect(.degrees(Double(-rotation))).offset(y: -4)
+                    }
+                }
                 .contentShape(shape, eoFill: true)
         }
         .buttonStyle(.plain)
         .onHover { hoveredControl = $0 ? .dial2CW : nil }
-        .accessibilityLabel("Outer dial, clockwise by default; direction buttons below")
+        .accessibilityLabel("Outer dial, clockwise by default; use direction selectors")
     }
 
     private var innerDial: some View {
         let selected = selectedControl == .dial1CW || selectedControl == .dial1CCW
         let active = activeControls.contains(.dial1CW) || activeControls.contains(.dial1CCW)
         return Button { onSelect(.dial1CW) } label: {
-            Circle().fill(active ? StudioTheme.accent.opacity(0.13) : .clear)
+            Circle().fill(selected || active ? StudioTheme.accent.opacity(active ? 0.30 : 0.16) : .clear)
                 .overlay(Circle().strokeBorder(selected || hoveredControl == .dial1CW ? StudioTheme.accent : .clear,
-                                               lineWidth: selected ? 2 : 1.5))
+                                               lineWidth: selected ? 4 : 1.5))
+                .overlay {
+                    if selected {
+                        Text("INNER · 1").font(StudioTheme.font(17, weight: .bold))
+                            .foregroundStyle(StudioTheme.accent).rotationEffect(.degrees(Double(-rotation)))
+                    }
+                }
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .onHover { hoveredControl = $0 ? .dial1CW : nil }
-        .accessibilityLabel("Inner dial, clockwise by default; direction buttons below")
+        .accessibilityLabel("Inner dial, clockwise by default; use direction selectors")
     }
 
     private func directions(_ name: String, cw: ControlID, ccw: ControlID) -> some View {

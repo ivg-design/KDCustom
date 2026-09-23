@@ -59,30 +59,35 @@ struct BindingEditor: View {
 
     var body: some View {
         ScrollView {
-            Group {
-                if wide {
-                    HStack(alignment: .top, spacing: 26) {
-                        VStack(alignment: .leading, spacing: 18) {
-                            header
-                            identitySection
-                            behaviorSection
-                        }.frame(width: 270)
-                        VStack(alignment: .leading, spacing: 18) {
-                            actionSection(.press)
-                            if !binding.controlID.isDial { actionSection(.release) }
-                            advancedSection
-                        }.frame(maxWidth: .infinity, alignment: .topLeading)
+            VStack(alignment: .leading, spacing: 13) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 24) { header; identitySection.frame(width: 230) }
+                    VStack(alignment: .leading, spacing: 8) { header; identitySection }
+                }
+                behaviorSection
+                if binding.controlID.isDial && binding.dialBehavior == .smart {
+                    DisclosureGroup {
+                        actionSection(.press).padding(.top, 8)
+                    } label: {
+                        HStack {
+                            Text("Fallback actions")
+                            Text("\(binding.pressActions.count) steps").foregroundStyle(StudioTheme.mutedText)
+                            Spacer()
+                            Text(binding.smart?.fallbackToActions == true && binding.smart?.shortcut == nil ? "Enabled" : "Inactive")
+                                .foregroundStyle(StudioTheme.mutedText)
+                        }.font(StudioTheme.font(11))
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: 18) {
-                        header
-                        identitySection
-                        behaviorSection
-                        actionSection(.press)
-                        if !binding.controlID.isDial { actionSection(.release) }
-                        advancedSection
+                    actionSection(.press)
+                }
+                if !binding.controlID.isDial {
+                    DisclosureGroup {
+                        actionSection(.release).padding(.top, 8)
+                    } label: {
+                        Text("On release · \(binding.releaseActions.count) steps").font(StudioTheme.font(11))
                     }
                 }
+                advancedSection
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -107,42 +112,25 @@ struct BindingEditor: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("CONTROL INSPECTOR")
-                .font(StudioTheme.font(10, weight: .bold))
-                .tracking(1.6)
-                .foregroundStyle(StudioTheme.accent)
-            Text(binding.controlID.editorTitle)
-                .font(StudioTheme.font(22, weight: .medium))
-            Text("Changes are saved to this group's assignments.")
-                .font(StudioTheme.font(11))
-                .foregroundStyle(StudioTheme.secondaryText)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(binding.controlID.editorTitle).font(StudioTheme.font(19, weight: .medium))
+            Text("Saved automatically to this group").font(StudioTheme.font(10))
+                .foregroundStyle(StudioTheme.mutedText)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var identitySection: some View {
-        editorSection("Display") {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(binding.controlID.isDial ? "App label" : "Button OLED label")
-                    .font(StudioTheme.font(11, weight: .medium))
-                TextField(binding.controlID.isDial ? "Shown in KDCustom" : "Shown on the device",
-                          text: $binding.label)
-                    .textFieldStyle(.roundedBorder)
-                let bytes = binding.label.utf16.count * 2
-                Text(bytes > 56
-                     ? (binding.controlID.isDial ? "App label exceeds the 56-byte limit."
-                                                  : "This label is too long for the button screen.")
-                     : (binding.controlID.isDial ? "Dials have no OLED label slot. Shown in KDCustom only."
-                                                 : "Short labels are easier to read on the button screen."))
-                    .font(StudioTheme.font(10))
-                    .foregroundStyle(bytes > 56 ? Color.red : StudioTheme.mutedText)
-            }
+        HStack(spacing: 8) {
+            Text(binding.controlID.isDial ? "Label" : "OLED label")
+                .font(StudioTheme.font(11)).foregroundStyle(StudioTheme.secondaryText)
+            TextField(binding.controlID.isDial ? "Shown in KDCustom" : "Shown on the device", text: $binding.label)
+                .textFieldStyle(.roundedBorder)
+                .help(binding.controlID.isDial ? "App label only; dials have no OLED text slot." : "Short labels are easier to read on the device.")
         }
     }
 
     private var behaviorSection: some View {
-        editorSection("Input behavior") {
+        VStack(alignment: .leading, spacing: 10) {
             if binding.controlID.isDial {
                 Picker("Dial mode", selection: Binding(get: { binding.dialBehavior }, set: { mode in
                     var next = binding
@@ -153,8 +141,8 @@ struct BindingEditor: View {
                     binding = next
                 })) {
                     Text("One action per detent").tag(DialBehavior.perStep)
-                    Text("Hold modifiers between detents").tag(DialBehavior.heldModifiers)
-                    Text("Smart · focused input & keyboard modifiers").tag(DialBehavior.smart)
+                    Text("Hold modifiers").tag(DialBehavior.heldModifiers)
+                    Text("Smart rules").tag(DialBehavior.smart)
                 }
                 .pickerStyle(.menu)
                 if binding.dialBehavior == .heldModifiers {
@@ -201,30 +189,18 @@ struct BindingEditor: View {
                     .padding(10)
                     .background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 7))
             }
-            VStack(spacing: 0) {
-                ForEach(actions.indices, id: \.self) { index in
-                    let location = StepLocation(lane: lane, index: index)
-                    ActionStepEditor(step: stepBinding(at: location),
-                                     number: index + 1,
-                                     isExpanded: expanded == location,
-                                     isRecording: recording == location,
-                                     hasCapturedKeys: chordCaptureCount > 0,
-                                     recordingModifiers: recordingModifiers,
-                                     onSelect: { selectStep(location) },
-                                     onRecord: { toggleRecording(location) },
-                                     onMoveUp: { moveStep(at: location, by: -1) },
-                                     onMoveDown: { moveStep(at: location, by: 1) },
-                                     onDelete: { deleteStep(at: location) },
-                                     canMoveUp: index > 0,
-                                     canMoveDown: index < actions.count - 1)
-                    if index < actions.count - 1 {
-                        HStack(spacing: 0) {
-                            Rectangle().fill(StudioTheme.accent.opacity(0.45))
-                                .frame(width: 2, height: 7).frame(width: 27)
-                            Spacer()
-                        }
+            if actions.count > 1 || expanded?.lane != lane {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170, maximum: 280), spacing: 6)], spacing: 6) {
+                    ForEach(actions.indices, id: \.self) { index in
+                        let location = StepLocation(lane: lane, index: index)
+                        stepEditor(location, expanded: false)
+                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(
+                                expanded == location ? StudioTheme.accent : .clear))
                     }
                 }
+            }
+            if let location = expanded, location.lane == lane, actions.indices.contains(location.index) {
+                stepEditor(location, expanded: true)
             }
             Button {
                 recording = nil
@@ -241,6 +217,17 @@ struct BindingEditor: View {
                 .font(StudioTheme.font(10))
                 .foregroundStyle(StudioTheme.mutedText)
         }
+    }
+
+    private func stepEditor(_ location: StepLocation, expanded showDetails: Bool) -> some View {
+        let actions = location.lane == .press ? binding.pressActions : binding.releaseActions
+        return ActionStepEditor(step: stepBinding(at: location), number: location.index + 1,
+            isExpanded: showDetails, isRecording: recording == location,
+            hasCapturedKeys: chordCaptureCount > 0, recordingModifiers: recordingModifiers,
+            onSelect: { selectStep(location) }, onRecord: { toggleRecording(location) },
+            onMoveUp: { moveStep(at: location, by: -1) }, onMoveDown: { moveStep(at: location, by: 1) },
+            onDelete: { deleteStep(at: location) }, canMoveUp: location.index > 0,
+            canMoveDown: location.index < actions.count - 1)
     }
 
     private var advancedSection: some View {
@@ -274,8 +261,7 @@ struct BindingEditor: View {
                 .foregroundStyle(StudioTheme.text)
         }
         .tint(StudioTheme.accent)
-        .padding(11)
-        .background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.vertical, 6)
     }
 
     private func editorSection<Content: View>(_ title: String,
@@ -653,8 +639,13 @@ private struct ActionStepEditor: View {
     private var operationEditor: some View {
         switch step.operation {
         case .keyDown, .keyUp, .keyTap:
-            keyCaptureRow
-            modifierButtons(modifiers: keyModifiersBinding)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    keyCaptureRow.frame(minWidth: 180)
+                    modifierButtons(modifiers: keyModifiersBinding).frame(width: 230)
+                }
+                VStack(spacing: 8) { keyCaptureRow; modifierButtons(modifiers: keyModifiersBinding) }
+            }
             DisclosureGroup("Advanced · virtual key code", isExpanded: $showingAdvancedKeyCodes) {
                 Stepper(value: keyCodeBinding, in: 0...255) {
                     valueLine("Virtual key code", value: "\(keyCodeBinding.wrappedValue)")

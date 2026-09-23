@@ -115,3 +115,5 @@ Focused-input rule fields are `id`, `name`, `enabled`, `targetGroupID` and at le
 See [Smart dials](SMART-DIALS.md) for numeric behavior, fallback semantics and app-specific limits. Agent tools configure these behaviors but cannot trigger a numeric adjustment or execute a shortcut.
 
 For Codex's shared configuration, run `codex mcp add kdcustom -- '/Applications/Keydial Studio.app/Contents/MacOS/KeydialStudio' --mcp`. New server tools appear after the client reloads its MCP configuration.
+
+Runtime reads also include `dialDiagnostics`: current observed physical modifier flags and the last eight Smart shortcut decisions (control, selector flags, output flags/key code, profile, timestamp and result). They expose no field contents and cannot execute actions.
