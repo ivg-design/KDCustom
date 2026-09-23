@@ -13,9 +13,11 @@ struct RivePointerSample: Sendable {
 /// from a serial background AX worker, not the main actor. This collector does
 /// not install a monitor, enable semantics, capture pixels, or route actions.
 final class RivePanelProbe {
-    private let maxNodes = 128
+    private let maxNodes = 160
+    private let maxDiscoveryNodes = 48
+    private let discoveryDepth = 3
     private let maxDepth = 8
-    private let maxDuration: TimeInterval = 0.16
+    private let maxDuration: TimeInterval = 0.4
     private let perMessageTimeout: Float = 0.04
     /// Accessed only from the caller's serial background AX queue.
     private var activeDeadline: TimeInterval = 0
@@ -72,17 +74,54 @@ final class RivePanelProbe {
         var nodes: [RivePanelNode] = [RivePanelNode(id: 0, parentID: nil, role: sanitizedRole(of: window),
                                                    frame: windowFrame, anchors: [])]
         var truncated = false
-        // Collect the two verified paths first, then inspect only their local
-        // panel-sized ancestor groups. A whole-window walk is too large and
-        // would mix unrelated editor panels and user-authored scene content.
+        // The native Flutter text editor can sit directly under AXWindow while
+        // the editor's semantic panel groups are siblings. Collect the verified
+        // paths, then discover only the shallow window/Flutter/root containers.
         let focusedID = appendPath(to: focused, window: window, deadline: deadline,
                                    elements: &elements, nodes: &nodes, truncated: &truncated)
         let hitID = appendPath(to: hit, window: window, deadline: deadline,
                                elements: &elements, nodes: &nodes, truncated: &truncated)
         if let windowFrame, !truncated {
             let seeds = [focusedID, hitID].compactMap { $0 }
+            var discovery: [(Int, Int)] = [(0, 0)]
+            var expanded = Set<Int>()
+            var discovered = 0
+            while !discovery.isEmpty {
+                guard ProcessInfo.processInfo.systemUptime < deadline,
+                      nodes.count < maxNodes else {
+                    truncated = true
+                    break
+                }
+                let (parentID, depth) = discovery.removeFirst()
+                guard depth < discoveryDepth, expanded.insert(parentID).inserted else { continue }
+                let children = childElements(of: elements[parentID])
+                for child in children {
+                    guard discovered < maxDiscoveryNodes, nodes.count < maxNodes,
+                          ProcessInfo.processInfo.systemUptime < deadline else {
+                        truncated = true
+                        break
+                    }
+                    discovered += 1
+                    let id: Int
+                    if let known = elements.firstIndex(where: { CFEqual($0, child) }) {
+                        id = known
+                    } else {
+                        AXUIElementSetMessagingTimeout(child, perMessageTimeout)
+                        id = nodes.count
+                        let role = sanitizedRole(of: child)
+                        elements.append(child)
+                        nodes.append(RivePanelNode(id: id, parentID: parentID, role: role,
+                                                   frame: frame(of: child),
+                                                   anchors: anchors(of: child, role: role)))
+                    }
+                    discovery.append((id, depth + 1))
+                }
+                if truncated { break }
+            }
+
             var roots = Set<Int>()
-            for seed in seeds {
+            for seed in seeds where !truncated {
+                guard let target = nodes[seed].frame else { continue }
                 var current: Int? = seed
                 while let id = current {
                     let node = nodes[id]
@@ -92,6 +131,17 @@ final class RivePanelProbe {
                         roots.insert(id)
                     }
                     current = node.parentID
+                }
+                // Include semantic sibling panes only when their own bounds
+                // fully contain the focused/hit control. The multiline root
+                // group is too large and has mixed panel tokens.
+                for node in nodes where node.role == .group {
+                    guard let frame = node.frame, windowFrame.contains(frame),
+                          frame.contains(target),
+                          frame.width * frame.height <= windowFrame.width * windowFrame.height * 0.65,
+                          frame.width * frame.height >= windowFrame.width * windowFrame.height * 0.01
+                    else { continue }
+                    roots.insert(node.id)
                 }
             }
             // Smallest regions first; a large scene tree cannot starve an

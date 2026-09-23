@@ -9,7 +9,7 @@ import Foundation
 final class OutputVerifier: NSObject, NSWindowDelegate {
     static let shared = OutputVerifier()
     var onRecoveredKeyState: (() -> Void)?
-    private let testedCodes: [UInt16] = [0, 4, 5, 30, 33, 46, 49, 54, 55, 56, 58, 59, 60, 61, 62, 63, 125, 126]
+    private let testedCodes: [UInt16] = [0, 4, 5, 30, 33, 46, 48, 49, 54, 55, 56, 58, 59, 60, 61, 62, 63, 125, 126]
 
     private struct EventSignature: Codable, Equatable {
         let kind: String
@@ -49,6 +49,7 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
 
     private enum Case: Int, CaseIterable {
         case commandUp, heldDial, delayedMacro, cancelledHold, smartArrows, smartCommand, smartBrush
+        case smartTabReturn, smartBurst
 
         var name: String {
             switch self {
@@ -59,6 +60,8 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
             case .smartArrows: "Smart arrows repeat with balanced releases"
             case .smartCommand: "Smart Command + Up repeats"
             case .smartBrush: "Smart bracket shortcuts and modifiers"
+            case .smartTabReturn: "Tab and Shift+Tab carry distinct modifier flags"
+            case .smartBurst: "Rapid Smart arrow burst preserves every down/up"
             }
         }
 
@@ -69,6 +72,7 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
             case .delayedMacro: 0.75
             case .cancelledHold: 0.70
             case .smartArrows, .smartCommand, .smartBrush: 0.30
+            case .smartTabReturn, .smartBurst: 0.50
             }
         }
 
@@ -95,6 +99,11 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
                 return [e("down", 30), e("up", 30), e("down", 30), e("up", 30),
                         e("down", 33, option: true), e("up", 33, option: true),
                         e("down", 30, shift: true), e("up", 30, shift: true)]
+            case .smartTabReturn:
+                return [e("down", 48), e("up", 48), e("down", 48, shift: true), e("up", 48, shift: true)]
+            case .smartBurst:
+                return (Array(repeating: UInt16(126), count: 16) + Array(repeating: UInt16(125), count: 16))
+                    .flatMap { [e("down", $0), e("up", $0)] }
             }
         }
     }
@@ -143,7 +152,7 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         title.font = .systemFont(ofSize: 20, weight: .medium)
         title.textColor = .white
         let explanation = NSTextField(wrappingLabelWithString:
-            "Runs seven checks through normal HID delivery into this disposable window. Stops if focus changes. This does not prove Rive behavior. Release all physical keys before running.")
+            "Runs nine checks through normal HID delivery into this disposable window. Stops if focus changes. This does not prove Rive behavior. Release all physical keys before running.")
         explanation.textColor = NSColor(calibratedWhite: 0.72, alpha: 1)
         explanation.font = .systemFont(ofSize: 12)
         let button = NSButton(title: "Run check", target: self, action: #selector(runCheck))
@@ -226,6 +235,14 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
 
     @objc private func runCheck() {
         guard !running, let window, window.isKeyWindow else { return }
+        guard NSApp.isActive,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() else {
+            let detail = "Not run: bring this diagnostic window to the foreground, then run again."
+            statusLabel?.stringValue = detail
+            writeReport(checks: [.init(name: "Foreground preflight", passed: false,
+                                       expected: [], observed: [], detail: detail)])
+            return
+        }
         guard AXIsProcessTrusted(), !IsSecureEventInputEnabled() else {
             let detail = "Accessibility permission is required and Secure Input must be off."
             statusLabel?.stringValue = detail
@@ -324,12 +341,20 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
             output?.smartShortcut(.init(keyCode: 30, repeatCount: 2))
             output?.smartShortcut(.init(keyCode: 33, modifiers: .option))
             output?.smartShortcut(.init(keyCode: 30, modifiers: .shift))
+        case .smartTabReturn:
+            output?.smartShortcut(.init(keyCode: 48))
+            output?.smartShortcut(.init(keyCode: 48, modifiers: .shift))
+        case .smartBurst:
+            output?.smartShortcut(.init(keyCode: 126, repeatCount: 16))
+            output?.smartShortcut(.init(keyCode: 125, repeatCount: 16))
         }
     }
 
     private func advance() {
         guard running, let test = currentCase, let engine else { return }
-        guard window?.isKeyWindow == true, AXIsProcessTrusted(), !IsSecureEventInputEnabled() else {
+        guard window?.isKeyWindow == true, NSApp.isActive,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid(),
+              AXIsProcessTrusted(), !IsSecureEventInputEnabled() else {
             stop(detail: "Window focus, Accessibility permission, or Secure Input changed; check stopped.")
             return
         }

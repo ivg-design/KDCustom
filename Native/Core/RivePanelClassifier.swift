@@ -90,11 +90,12 @@ struct RivePanelSnapshot: Sendable {
 }
 
 enum RivePanelConfidence: Equatable, Sendable {
-    case none, focus, corroborated
+    case none, geometry, focus, corroborated
 }
 
 enum RivePanelReason: Equatable, Sendable {
-    case matchedFocus, matchedFocusAndClick, ambiguous, stale, scopeMismatch, shallowTree
+    case matchedFocus, matchedContainingPane, matchedFocusAndClick
+    case ambiguous, stale, scopeMismatch, shallowTree
 }
 
 struct RivePanelDecision: Sendable {
@@ -123,14 +124,16 @@ enum RivePanelClassifier {
               valid(window), !snapshot.nodes.isEmpty else {
             return decision(reason: .shallowTree)
         }
-        let focused = panel(at: snapshot.focusedNodeID, in: snapshot, window: window)
-        let interacted: RivePanelKind?
+        let focusedMatch = panel(at: snapshot.focusedNodeID, in: snapshot, window: window)
+        let interactedMatch: PanelMatch?
         if let at = snapshot.interactionAt, now >= at,
            now - at <= interactionLifetime {
-            interacted = panel(at: snapshot.hitNodeID, in: snapshot, window: window)
+            interactedMatch = panel(at: snapshot.hitNodeID, in: snapshot, window: window)
         } else {
-            interacted = nil
+            interactedMatch = nil
         }
+        let focused = focusedMatch?.panel
+        let interacted = interactedMatch?.panel
 
         if let focused, let interacted {
             guard focused == interacted else {
@@ -143,7 +146,10 @@ enum RivePanelClassifier {
         }
         if let focused, snapshot.interactionAt == nil {
             return RivePanelDecision(focusedPanel: focused, lastInteractedPanel: nil,
-                                     automaticPanel: focused, confidence: .focus, reason: .matchedFocus)
+                                     automaticPanel: focused,
+                                     confidence: focusedMatch?.viaSiblingGeometry == true ? .geometry : .focus,
+                                     reason: focusedMatch?.viaSiblingGeometry == true
+                                         ? .matchedContainingPane : .matchedFocus)
         }
         // A recent click can disagree with stale AX focus. Expose it for
         // diagnostics but do not turn it into an automatic keyboard route.
@@ -156,30 +162,58 @@ enum RivePanelClassifier {
                           automaticPanel: nil, confidence: .none, reason: reason)
     }
 
+    private struct PanelMatch {
+        let panel: RivePanelKind
+        let viaSiblingGeometry: Bool
+    }
+
     private static func panel(at nodeID: Int?, in snapshot: RivePanelSnapshot,
-                              window: CGRect) -> RivePanelKind? {
+                              window: CGRect) -> PanelMatch? {
         guard let nodeID, let target = snapshot.nodes.first(where: { $0.id == nodeID }),
               let targetFrame = target.frame, valid(targetFrame), window.contains(targetFrame) else {
             return nil
         }
         let byID = Dictionary(uniqueKeysWithValues: snapshot.nodes.map { ($0.id, $0) })
-        var candidates: [(panel: RivePanelKind, area: CGFloat)] = []
+        var path = Set<Int>()
         var ancestor: RivePanelNode? = target
-        var seen = Set<Int>()
-        while let node = ancestor, seen.insert(node.id).inserted {
+        while let node = ancestor, path.insert(node.id).inserted {
             if node.role == .menu || node.role == .popover || node.role == .dialog ||
                node.role == .sheet || node.role == .secureText { return nil }
-            if node.role == .group, let frame = node.frame, valid(frame),
-               window.contains(frame), frame.contains(targetFrame),
-               frame.width * frame.height <= window.width * window.height * 0.65,
-               frame.width * frame.height >= window.width * window.height * 0.01,
-               let panel = uniquePanel(in: node.id, nodes: snapshot.nodes) {
-                candidates.append((panel, frame.width * frame.height))
-            }
             ancestor = node.parentID.flatMap { byID[$0] }
         }
-        guard let smallest = candidates.min(by: { $0.area < $1.area }) else { return nil }
-        return smallest.panel
+        let candidates: [(node: RivePanelNode, panel: RivePanelKind)] = snapshot.nodes.compactMap { node in
+            guard node.role == .group, let frame = node.frame, valid(frame),
+                  window.contains(frame), frame.contains(targetFrame),
+                  frame.width * frame.height <= window.width * window.height * 0.65,
+                  frame.width * frame.height >= window.width * window.height * 0.01,
+                  let panel = uniquePanel(in: node.id, nodes: snapshot.nodes) else { return nil }
+            return (node, panel)
+        }
+        guard let selected = candidates.min(by: {
+            let a = $0.node.frame!, b = $1.node.frame!
+            return a.width * a.height < b.width * b.height
+        }) else { return nil }
+        // Two independently rooted panes can overlap after a resize, popover,
+        // or stale geometry. Matching text in both is still ambiguous.
+        for other in candidates where other.node.id != selected.node.id {
+            if other.panel != selected.panel ||
+               (!isAncestor(other.node.id, of: selected.node.id, nodes: byID) &&
+                !isAncestor(selected.node.id, of: other.node.id, nodes: byID)) {
+                return nil
+            }
+        }
+        return PanelMatch(panel: selected.panel, viaSiblingGeometry: !path.contains(selected.node.id))
+    }
+
+    private static func isAncestor(_ ancestor: Int, of descendant: Int,
+                                   nodes: [Int: RivePanelNode]) -> Bool {
+        var current: Int? = descendant
+        var seen = Set<Int>()
+        while let id = current, seen.insert(id).inserted {
+            if id == ancestor { return true }
+            current = nodes[id]?.parentID
+        }
+        return false
     }
 
     private static func uniquePanel(in root: Int, nodes: [RivePanelNode]) -> RivePanelKind? {

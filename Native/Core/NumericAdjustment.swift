@@ -10,6 +10,18 @@ enum NumericAdjustmentResult: Sendable {
     case focusRestoreFailed
     case draftNotConfirmed
     case arrowCommitNotConfirmed
+    case tabAdvanceNotConfirmed
+    case tabReturnNotConfirmed
+
+    /// These outcomes follow an attempted keyboard write or commit. A later
+    /// detent must not silently continue in a field reached by a failed return.
+    var needsFieldReselection: Bool {
+        switch self {
+        case .failed, .focusRestoreFailed, .draftNotConfirmed, .arrowCommitNotConfirmed,
+             .tabAdvanceNotConfirmed, .tabReturnNotConfirmed: return true
+        case .applied, .unsupported, .cancelled: return false
+        }
+    }
 }
 
 /// Pure, bounded arithmetic for an explicitly requested dial adjustment.

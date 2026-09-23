@@ -61,7 +61,7 @@ final class NumericAdjustmentLease: @unchecked Sendable {
             current?.token == ticket.token && current?.revision == ticket.revision
     }
 
-    /// Only the bounded Enter/refocus operation may defer its own AX focus
+    /// Only a bounded keyboard apply operation may defer its own AX focus
     /// notifications. Physical input and app/session changes still revoke it.
     func beginFocusRestoration(_ ticket: Ticket, deadline: TimeInterval) -> Bool {
         lock.lock(); defer { lock.unlock() }

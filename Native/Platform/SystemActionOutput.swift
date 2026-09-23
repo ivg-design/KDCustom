@@ -21,6 +21,7 @@ final class SystemActionOutput: ActionOutput {
     var onPhysicalEditingInput: (() -> Void)?
     var onPhysicalPointerDown: ((CGPoint) -> Void)?
     var onExternalNavigation: ((UInt16, Bool, Int64, UInt64) -> Void)?
+    var onInjectedNavigation: ((UInt16, Bool, UInt64) -> Void)?
     var onOutput: ((String) -> Void)?
 
     func startObserving() {
@@ -157,6 +158,10 @@ final class SystemActionOutput: ActionOutput {
         case .keyDown, .keyUp, .flagsChanged:
             let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
             physical.key(code, down: !release, posted: true)
+            if (event.type == .keyDown || event.type == .keyUp),
+               [36, 48, 53, 76, 123, 124, 125, 126].contains(code) {
+                onInjectedNavigation?(code, event.type == .keyDown, event.flags.rawValue)
+            }
         case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp:
             physical.button(UInt32(clamping: event.getIntegerValueField(.mouseEventButtonNumber)), down: !release, posted: true)
         default: break

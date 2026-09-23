@@ -62,6 +62,46 @@ enum RivePanelClassifierTests {
         check(classify(snapshot(inspector, focus: 4)).automaticPanel == .inspector,
               "local inspector chrome and focused field identify inspector, without field value")
 
+        // Flutter's native editor can be a direct AXWindow child, while its
+        // semantic inspector is a sibling under the Flutter root.
+        let detachedField = [
+            node(0, nil, .other, window),
+            node(1, 0, .textField, CGRect(x: 850, y: 360, width: 39, height: 17)),
+            node(2, 0, .group, window),
+            node(3, 2, .group, window, [.hierarchy, .timeline, .stage, .computedTransform]),
+            node(4, 3, .group, CGRect(x: 760, y: 80, width: 230, height: 670)),
+            node(5, 4, .staticText, CGRect(x: 775, y: 300, width: 140, height: 20), [.computedTransform]),
+            node(6, 4, .staticText, CGRect(x: 775, y: 330, width: 90, height: 20), [.constraints]),
+            node(7, 3, .group, CGRect(x: 200, y: 100, width: 550, height: 500)),
+            node(8, 7, .staticText, CGRect(x: 220, y: 110, width: 60, height: 20), [.stage]),
+            node(9, 7, .staticText, CGRect(x: 700, y: 110, width: 50, height: 20), [.zoomReadout])
+        ]
+        let detachedDecision = classify(snapshot(detachedField, focus: 1))
+        check(detachedDecision.focusedPanel == .inspector &&
+              detachedDecision.automaticPanel == .inspector &&
+              detachedDecision.confidence == .geometry &&
+              detachedDecision.reason == .matchedContainingPane,
+              "detached native field uses uniquely anchored containing semantic sibling")
+        let detachedCorroborated = classify(snapshot(detachedField, focus: 1, hit: 1, at: 10))
+        check(detachedCorroborated.automaticPanel == .inspector &&
+              detachedCorroborated.confidence == .corroborated,
+              "same focused and hit field corroborates containing pane geometry")
+        var overlappingPanes = detachedField
+        overlappingPanes.append(node(10, 3, .group, CGRect(x: 740, y: 70, width: 250, height: 680)))
+        overlappingPanes.append(node(11, 10, .staticText,
+                                     CGRect(x: 750, y: 290, width: 100, height: 20), [.drawOrder]))
+        overlappingPanes.append(node(12, 10, .staticText,
+                                     CGRect(x: 750, y: 320, width: 100, height: 20), [.blend]))
+        check(classify(snapshot(overlappingPanes, focus: 1)).automaticPanel == nil,
+              "overlapping independent semantic panes are ambiguous even with same panel tokens")
+        let noLocalChrome = detachedField.filter { $0.id != 5 && $0.id != 6 }
+        check(classify(snapshot(noLocalChrome, focus: 1)).automaticPanel == nil,
+              "combined root text cannot label an unlabeled sibling pane")
+        var genericCanvas = detachedField.filter { $0.id != 5 && $0.id != 6 && $0.id != 9 }
+        genericCanvas[1] = node(1, 0, .textField, CGRect(x: 300, y: 300, width: 39, height: 17))
+        check(classify(snapshot(genericCanvas, focus: 1)).automaticPanel == nil,
+              "a Stage anchor without local zoom evidence cannot classify detached focus")
+
         let hierarchy = [
             node(0, nil, .other, window),
             node(1, 0, .group, CGRect(x: 0, y: 80, width: 230, height: 650)),

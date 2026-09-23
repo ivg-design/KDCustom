@@ -75,6 +75,8 @@ final class StudioModel: ObservableObject {
     private var typedNumericContext: TypedNumericContext?
     private var typedNumericJob: UUID?
     private var typedNumericSteps = NumericStepBuffer()
+    @Published private var numericReselectionPID: pid_t?
+    private var physicalEditingEpoch: UInt64 = 0
 
     init() throws {
         configuration = try ConfigurationService()
@@ -97,11 +99,23 @@ final class StudioModel: ObservableObject {
         engine.onGroupChange = { [weak self] offset in self?.queueGroupChange(offset) }
         engine.onEvent = { [weak self] in self?.record($0) }
         output.onObservationLost = { [weak self] in self?.cancelActions(reason: "Input observer interrupted") }
-        output.onPhysicalEditingInput = { [weak self] in self?.cancelNumericWork() }
+        output.onPhysicalEditingInput = { [weak self] in
+            guard let self else { return }
+            self.physicalEditingEpoch &+= 1
+            self.cancelNumericWork()
+            if self.numericReselectionPID == NSWorkspace.shared.frontmostApplication?.processIdentifier {
+                self.numericReselectionPID = nil
+                self.onStatusChange?()
+            }
+        }
         output.onPhysicalPointerDown = { [weak self] in self?.panelDiagnostics.pointerDown($0) }
         output.onExternalNavigation = { [weak self] code, down, source, flags in
             guard let self, self.activeBundleID == "app.rive.editor" else { return }
             self.panelDiagnostics.note("externalNavigation", "key=\(code) \(down ? "down" : "up") source=\(source) flags=\(flags)")
+        }
+        output.onInjectedNavigation = { [weak self] code, down, flags in
+            guard let self, self.activeBundleID == "app.rive.editor" else { return }
+            self.panelDiagnostics.note("injectedNavigation", "key=\(code) \(down ? "down" : "up") flags=\(flags)")
         }
         output.onOutput = { [weak self] event in
             guard let self, self.activeBundleID == "app.rive.editor" else { return }
@@ -160,6 +174,9 @@ final class StudioModel: ObservableObject {
         if lastForegroundPID == nil || activeBundleID == nil { return "Waiting for active app" }
         if activeBundleID == Bundle.main.bundleIdentifier { return "Editing · output suspended" }
         if !output.observing { return "Input observer unavailable" }
+        if numericReselectionPID != nil && numericReselectionPID == lastForegroundPID {
+            return "Select the numeric field again"
+        }
         return "Ready"
     }
 
@@ -309,6 +326,10 @@ final class StudioModel: ObservableObject {
     }
     private func smartDial(_ binding: ControlBinding) {
         engine.prepareSmartDial(binding.controlID)
+        guard numericReselectionPID == nil || numericReselectionPID != lastForegroundPID else {
+            record("Smart · select the numeric field again before turning")
+            return
+        }
         let modifiers = output.physicalModifiers
         guard let settings = binding.smart,
               let choice = settings.selection(for: modifiers) else {
@@ -374,6 +395,8 @@ final class StudioModel: ObservableObject {
             case .focusRestoreFailed: self.record("Smart · field focus could not be restored")
             case .draftNotConfirmed: self.record("Smart · draft not confirmed; arrow not sent")
             case .arrowCommitNotConfirmed: self.record("Smart · native arrow result not confirmed; stopped")
+            case .tabAdvanceNotConfirmed: self.record("Smart · Tab sent; next field not identified; stopped")
+            case .tabReturnNotConfirmed: self.record("Smart · Tab return not confirmed; stopped")
             }
         }
     }
@@ -381,11 +404,26 @@ final class StudioModel: ObservableObject {
         guard typedNumericJob == nil, let context = typedNumericContext,
               let batch = typedNumericSteps.take() else { return }
         let job = UUID(); typedNumericJob = job
+        let physicalEpoch = physicalEditingEpoch
         focusObserver.adjustNumeric(token: context.token, delta: batch.delta,
             allowTextField: context.allowText, writeMethod: .keyboard,
             commitMethod: context.commitMethod, nativeArrowStep: context.nativeArrowStep) { [weak self] result in
-            guard let self, self.typedNumericJob == job else { return }
+            guard let self else { return }
             self.reconcileForeground()
+            // An AX notification can cancel the job just after a failed Tab
+            // transaction ends. Keep the failure latch even in that case,
+            // unless real editing input or application/configuration changed.
+            if result.needsFieldReselection, self.physicalEditingEpoch == physicalEpoch,
+               self.revision == context.revision, self.effectiveProfile.id == context.profile,
+               self.lastForegroundPID == context.pid {
+                self.numericReselectionPID = context.pid
+                self.onStatusChange?()
+                if self.typedNumericJob != job {
+                    self.cancelNumericWork()
+                    self.record("Smart · apply not confirmed; select the numeric field again")
+                }
+            }
+            guard self.typedNumericJob == job else { return }
             guard self.output.enabled, self.typedNumericContext == context,
                   self.revision == context.revision, self.effectiveProfile.id == context.profile,
                   self.lastForegroundPID == context.pid, self.focusedInput.token == context.token else {
@@ -406,6 +444,10 @@ final class StudioModel: ObservableObject {
                 self.cancelNumericWork(); self.record("Smart · draft not confirmed; arrow not sent")
             case .arrowCommitNotConfirmed:
                 self.cancelNumericWork(); self.record("Smart · native arrow result not confirmed; stopped")
+            case .tabAdvanceNotConfirmed:
+                self.cancelNumericWork(); self.record("Smart · Tab sent; next field not identified; stopped")
+            case .tabReturnNotConfirmed:
+                self.cancelNumericWork(); self.record("Smart · Tab return not confirmed; stopped")
             case .cancelled: self.cancelNumericWork()
             }
         }

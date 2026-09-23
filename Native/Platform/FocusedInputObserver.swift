@@ -273,6 +273,18 @@ private final class FocusAXWorker: @unchecked Sendable {
         if writeMethod == .keyboard {
             guard let original = rawValue as? String, let text = replacement as? String,
                   let keyboardOutput else { return .unsupported }
+            var tabAnchor: (window: AXUIElement, fieldFrame: CGRect, windowFrame: CGRect)?
+            if commitMethod == .tabReturn {
+                guard let window = elementAttribute(kAXWindowAttribute as CFString, from: focused),
+                      let fieldFrame = frame(of: focused), let windowFrame = frame(of: window),
+                      windowFrame.contains(fieldFrame) else { return .unsupported }
+                tabAnchor = (window, fieldFrame, windowFrame)
+                // Rive can emit transient focus notifications while replacing
+                // the text of its shared native editor. Direct identity/value
+                // checks still guard every write; physical input revokes this.
+                guard numericLease.beginFocusRestoration(ticket, deadline: deadline) else { return .cancelled }
+            }
+            defer { if commitMethod == .tabReturn { numericLease.endFocusRestoration(ticket) } }
             let arrowPlan: NumericAdjustment.ArrowCommitPlan?
             if commitMethod == .nativeArrow {
                 guard let plan = NumericAdjustment.arrowCommitPlan(target: text, step: nativeArrowStep,
@@ -318,9 +330,11 @@ private final class FocusAXWorker: @unchecked Sendable {
                   NumericAdjustment.equalValues(actual, text) else {
                 return arrowPlan == nil ? .failed : .arrowCommitNotConfirmed
             }
-            if commitMethod == .tabReturn {
+            if let tabAnchor {
                 return commitThroughTab(focused, app: app, pid: pid, ticket: ticket,
-                                        text: text, output: keyboardOutput, deadline: deadline)
+                                        text: text, output: keyboardOutput, deadline: deadline,
+                                        window: tabAnchor.window, originalFrame: tabAnchor.fieldFrame,
+                                        windowFrame: tabAnchor.windowFrame)
             }
             if commitMethod == .enter {
                 return commitAndRestore(focused, app: app, pid: pid, ticket: ticket,
@@ -335,11 +349,14 @@ private final class FocusAXWorker: @unchecked Sendable {
 
     private func commitThroughTab(_ field: AXUIElement, app: AXUIElement, pid: pid_t,
                                   ticket: NumericAdjustmentLease.Ticket, text: String,
-                                  output: SystemActionOutput, deadline: TimeInterval) -> NumericAdjustmentResult {
-        guard let window = elementAttribute(kAXWindowAttribute as CFString, from: field),
+                                  output: SystemActionOutput, deadline: TimeInterval,
+                                  window: AXUIElement, originalFrame: CGRect,
+                                  windowFrame: CGRect) -> NumericAdjustmentResult {
+        guard let fieldWindow = elementAttribute(kAXWindowAttribute as CFString, from: field),
+              CFEqual(fieldWindow, window), let currentFrame = frame(of: field),
+              NumericFocusGeometry.sameField(currentFrame, originalFrame),
               hasExpectedFocus(field, app: app, pid: pid, deadline: deadline),
-              numericLease.beginFocusRestoration(ticket, deadline: deadline) else { return .cancelled }
-        defer { numericLease.endFocusRestoration(ticket) }
+              numericLease.isCurrent(ticket) else { return .cancelled }
         let submitted = DispatchQueue.main.sync {
             numericLease.isCurrent(ticket) && output.smartShortcut(SmartShortcut(keyCode: 48))
         }
@@ -352,18 +369,41 @@ private final class FocusAXWorker: @unchecked Sendable {
               let nextRole = stringAttribute(kAXRoleAttribute as CFString, from: next),
               [kAXTextFieldRole as String, kAXTextAreaRole as String].contains(nextRole),
               stringAttribute(kAXSubroleAttribute as CFString, from: next) != (kAXSecureTextFieldSubrole as String),
-              !CFEqual(next, field), hasExpectedFocus(next, app: app, pid: pid, deadline: deadline)
-        else { return .focusRestoreFailed }
+              let nextFrame = frame(of: next),
+              NumericFocusGeometry.distinctField(nextFrame, original: originalFrame, window: windowFrame),
+              hasExpectedFocus(next, app: app, pid: pid, deadline: deadline)
+        else { return .tabAdvanceNotConfirmed }
         let returned = DispatchQueue.main.sync {
             numericLease.isCurrent(ticket) && output.smartShortcut(SmartShortcut(keyCode: 48, modifiers: .shift))
         }
-        guard returned else { return .focusRestoreFailed }
+        guard returned else { return .tabReturnNotConfirmed }
         Thread.sleep(forTimeInterval: 0.08)
         guard numericLease.isCurrent(ticket) else { return .cancelled }
-        guard hasExpectedFocus(field, app: app, pid: pid, deadline: deadline),
-              let actual = stringAttribute(kAXValueAttribute as CFString, from: field),
-              NumericAdjustment.equalValues(actual, text) else { return .focusRestoreFailed }
+        guard let returnedField = elementAttribute(kAXFocusedUIElementAttribute as CFString, from: app),
+              let returnedRole = stringAttribute(kAXRoleAttribute as CFString, from: returnedField),
+              [kAXTextFieldRole as String, kAXTextAreaRole as String].contains(returnedRole),
+              stringAttribute(kAXSubroleAttribute as CFString, from: returnedField) != (kAXSecureTextFieldSubrole as String),
+              hasExpectedFocus(returnedField, app: app, pid: pid, deadline: deadline),
+              let returnedWindow = elementAttribute(kAXWindowAttribute as CFString, from: returnedField),
+              CFEqual(returnedWindow, window), let returnedFrame = frame(of: returnedField),
+              NumericFocusGeometry.sameField(returnedFrame, originalFrame),
+              let actual = stringAttribute(kAXValueAttribute as CFString, from: returnedField),
+              NumericAdjustment.equalValues(actual, text) else { return .tabReturnNotConfirmed }
         return .applied
+    }
+
+    private func frame(of element: AXUIElement) -> CGRect? {
+        var rawPosition: CFTypeRef?, rawSize: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &rawPosition) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &rawSize) == .success,
+              let rawPosition, let rawSize,
+              CFGetTypeID(rawPosition) == AXValueGetTypeID(), CFGetTypeID(rawSize) == AXValueGetTypeID()
+        else { return nil }
+        var point = CGPoint.zero, size = CGSize.zero
+        guard AXValueGetValue(rawPosition as! AXValue, .cgPoint, &point),
+              AXValueGetValue(rawSize as! AXValue, .cgSize, &size) else { return nil }
+        let frame = CGRect(origin: point, size: size)
+        return NumericFocusGeometry.valid(frame) ? frame : nil
     }
 
     private func commitAndRestore(_ field: AXUIElement, app: AXUIElement, pid: pid_t,
