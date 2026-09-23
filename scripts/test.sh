@@ -24,6 +24,7 @@ run SmartDial "${CORE[@]}" Native/MCP/MCPTools.swift
 run SmartHeuristics Native/Core/Models.swift Native/Core/SmartDialHeuristics.swift
 run NumericAdjustment Native/Core/NumericAdjustment.swift
 run NumericStepBuffer Native/Core/NumericAdjustment.swift Native/Core/NumericStepBuffer.swift
+run NumericAdjustmentLease Native/Core/NumericAdjustmentLease.swift
 run ShortcutRecorder Native/Core/Models.swift Native/UI/StudioTheme.swift Native/UI/BindingEditor.swift Native/UI/SmartDialEditor.swift -framework AppKit -framework SwiftUI
 run ConfigurationService "${CORE[@]}" Native/Core/ConfigurationService.swift
 run HuionImport "${CORE[@]}" Native/Core/HuionImporter.swift

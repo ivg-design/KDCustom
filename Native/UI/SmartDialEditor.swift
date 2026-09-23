@@ -10,7 +10,7 @@ struct SmartDialEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if settings.shortcut == nil {
+            if settings.hasNumericOutput {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 18) { numericOptions }
                     VStack(alignment: .leading, spacing: 8) { numericOptions }
@@ -23,7 +23,11 @@ struct SmartDialEditor: View {
                     Text("Custom numeric · keyboard text").tag(NumericWriteMethod.keyboard)
                 }.font(StudioTheme.font(11))
                 if settings.writeMethod == .keyboard {
-                    Text("Reads the focused number and types the calculated value. Press Enter when finished if the app requires it. Non-numeric fields are left unchanged.")
+                    Toggle("Apply immediately · Enter, then refocus the same field", isOn: $settings.commitWithEnter)
+                        .font(StudioTheme.font(11))
+                    Text(settings.commitWithEnter
+                        ? "Commits each numeric update and restores that field's focus. Stops if focus cannot be restored or you interact elsewhere."
+                        : "Reads the focused number and types the calculated value. Press Enter when finished if the app requires it. Non-numeric fields are left unchanged.")
                         .font(StudioTheme.font(10)).foregroundStyle(StudioTheme.secondaryText)
                 }
             }
@@ -51,6 +55,7 @@ struct SmartDialEditor: View {
                         }.buttonStyle(.plain).help("Edit the keyboard modifiers that select this rule")
                         SmartActionEditor(shortcut: $settings.modifierRules[index].shortcut,
                                           inherited: settings.shortcut, step: $settings.modifierRules[index].step,
+                                          inheritBaseShortcut: $settings.modifierRules[index].inheritBaseShortcut,
                                           isRule: true)
                     }
                     if expandedRule == rule.id {
@@ -74,7 +79,7 @@ struct SmartDialEditor: View {
                 Text("Exact modifier match").font(StudioTheme.font(10)).foregroundStyle(StudioTheme.mutedText)
                     .help("Unassigned keyboard modifier combinations do nothing. Each dial direction is independent.")
             }.padding(.top, 3)
-            if settings.shortcut == nil && settings.writeMethod == .accessibility {
+            if settings.hasNumericOutput && settings.writeMethod == .accessibility {
                 Toggle("Use fallback actions for unsupported fields", isOn: $settings.fallbackToActions)
                     .font(StudioTheme.font(11)).padding(.top, 4)
             }
@@ -89,7 +94,7 @@ struct SmartDialEditor: View {
         Picker("Detect input", selection: $settings.detection) {
             Text("Automatic · app hints").tag(SmartDialDetection.automatic)
             Text("Numeric field override").tag(SmartDialDetection.numericField)
-        }.help("Requires a writable numeric accessibility value. For custom app controls, choose a shortcut output.")
+        }.help("Numeric output needs a readable numeric field. Accessibility value also requires a working AX setter; keyboard text types the calculated value.")
     }
 
     private func ruleRow(title: String, subtitle: String, shortcut: Binding<SmartShortcut?>,
@@ -99,7 +104,8 @@ struct SmartDialEditor: View {
                 Text(title).font(StudioTheme.font(12, weight: .medium))
                 Text(subtitle).font(StudioTheme.font(10)).foregroundStyle(StudioTheme.secondaryText)
             }.frame(width: 112, alignment: .leading)
-            SmartActionEditor(shortcut: shortcut, inherited: inherited, step: step, isRule: false)
+            SmartActionEditor(shortcut: shortcut, inherited: inherited, step: step,
+                              inheritBaseShortcut: .constant(false), isRule: false)
         }.padding(10).background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 5))
     }
 
@@ -134,6 +140,7 @@ private struct SmartActionEditor: View {
     @Binding var shortcut: SmartShortcut?
     let inherited: SmartShortcut?
     @Binding var step: Double
+    @Binding var inheritBaseShortcut: Bool
     let isRule: Bool
     @State private var recording = false
     @State private var held: KeyModifiers = []
@@ -155,12 +162,16 @@ private struct SmartActionEditor: View {
     }
 
     private var mode: some View {
-        Picker("Output type", selection: Binding(get: { shortcut != nil }, set: { enabled in
+        Picker("Output type", selection: Binding(get: {
+            shortcut != nil ? "shortcut" : (isRule && inheritBaseShortcut ? "inherit" : "numeric")
+        }, set: { mode in
             recording = false
-            shortcut = enabled ? (inherited ?? SmartShortcut(keyCode: 126)) : nil
+            inheritBaseShortcut = mode == "inherit"
+            shortcut = mode == "shortcut" ? (inherited ?? SmartShortcut(keyCode: 126)) : nil
         })) {
-            Text(isRule && inherited != nil ? "Inherit" : "Numeric").tag(false)
-            Text("Shortcut").tag(true)
+            if isRule { Text("Inherit").tag("inherit") }
+            Text("Numeric").tag("numeric")
+            Text("Shortcut").tag("shortcut")
         }.labelsHidden().pickerStyle(.menu).font(StudioTheme.font(11))
     }
 
@@ -178,7 +189,7 @@ private struct SmartActionEditor: View {
                 .background(StudioTheme.panel, in: RoundedRectangle(cornerRadius: 4))
                 .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(recording ? StudioTheme.accent : StudioTheme.divider))
                 .help("Sends this exact shortcut; the held selector modifiers are consumed for this event.")
-        } else if let inherited {
+        } else if inheritBaseShortcut, let inherited {
             Text("Base: \(KeyCodeName.modifiers(inherited.modifiers))\(KeyCodeName.title(inherited.keyCode))")
                 .font(StudioTheme.font(13, weight: .medium)).frame(maxWidth: .infinity, alignment: .leading)
         } else {

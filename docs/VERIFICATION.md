@@ -1,6 +1,6 @@
 # Verification status
 
-Development checkpoint: 2026-09-23, KDCustom 0.5.0 (installed build 19). Final packaging and isolated numeric validation completed after unlock. The native controller is implemented and being exercised on one Apple Silicon Mac with one K40. This is not a claim of full firmware parity or a published release.
+Development checkpoint: 2026-09-23, KDCustom 0.5.0 (installed build 20). Final packaging and isolated numeric validation completed after unlock. The native controller is implemented and being exercised on one Apple Silicon Mac with one K40. This is not a claim of full firmware parity or a published release.
 
 ## Exact numeric input in Rive
 
@@ -9,6 +9,8 @@ The user confirmed that physically typing `0.01` and pressing Enter retains that
 Build 19 adds an explicit **Custom numeric · keyboard text** method. It reads strictly numeric focused AX text, calculates with decimal arithmetic, sends Command+A and the replacement through the production HID path, and verifies the resulting field text. Focus leases, configuration revisions, foreground checks, and physical editing input cancel stale work. Pending detents use a bounded decimal queue; direction reversals remain ordered. No clipboard is used and field values are not logged or exposed through MCP.
 
 The previously empty Rive Group 2 is now **Exact numeric**, with outer-dial steps of 0.01, Option steps of 0.001, and Shift steps of 0.1. Group 1 retains its working native shortcuts. The user tested both outer-dial directions without modifiers, pressed Enter, and confirmed: **exact 0.01 steps work and retain the final value**. The user then confirmed Option produces 0.001 steps and Shift produces 0.1 steps in both directions, retaining the expected values after Enter. Rapid-turn behavior still needs separate physical acceptance. Text readback alone does not establish a document commit; press Enter after turning when Rive requires it.
+
+After that acceptance test, the user requested a different Group 2 scale: normal 1, Command 0.1, Option 0.01, Shift 10, and Control+Shift 100. Both outer-dial bindings were updated atomically and the complete profile readback matched the intended change. The user confirmed all five magnitudes work as configured, then clarified that 1, 0.1 and 10 should use native shortcuts while only 0.01 and 100 use numeric text. The user also confirmed that Enter removes numeric-field focus.
 
 Rive's accessibility tree exposed a text field during this test after earlier observations exposed only its container. Reliable semantics availability after restarting Rive, automatic active-panel detection, other Rive fields, and Adobe support remain unverified.
 
@@ -36,7 +38,7 @@ The four saved Smart/brush bindings were restored after that test. The first Sma
 
 ## Latest 0.5.0 checks
 
-- All 18 focused suites passed for build 19, including physical input ownership, side-specific modifier encoding, numeric write-method configuration, and bounded decimal batching. The native build passed warnings as errors and its Developer ID signature verified.
+- All 19 focused suites passed for build 20, including physical input ownership, side-specific modifier encoding, numeric write-method configuration, mixed numeric/shortcut inheritance, bounded decimal batching, and focus-restoration lease cancellation. The native build passed warnings as errors and its Developer ID signature verified.
 - Installed 0.5.0 retained all three permissions and USB readiness. The observed USB battery reply now displays Full. The original 14 profiles and all user mappings were compared against the pre-update snapshot and preserved; the temporary QA profile was removed.
 - Installed MCP discovery returns 19 tools. Complete Smart bindings round-trip through the private bridge; focus-rule atomic batch creation, priority changes and metadata reads work. Codex's global `kdcustom` stdio entry points to the stable installed executable.
 - Earlier live UI inspection confirmed sidebar app icons, revised outlines, near-edge OLED status, dial assignment labels and the compact three-step flow. Command+Down appeared directly in the shortcut field; a recorded Command+Z chord stayed visible while recording continued. Focus-rule editing left the stored default group unchanged. Final visual approval remains with the user.
@@ -56,6 +58,10 @@ The previous icon-acceptance app was **0.5.0 (14)**. Its signature, stapled tick
 Build 18 was installed after a clean quit, signed, notarized, stapled and accepted by Gatekeeper. Its configuration was byte-identical across installation; subsequent Smart test edits were applied separately through MCP. The redesigned landscape authoring UI and full-width Smart rule rows were inspected live, with group/dial side rails, a smaller device preview, collapsed fallback actions, and distinct inner-disc/outer-rim selection. The portrait layout was also inspected live at 270 degrees and device rotation was restored to 180 degrees. The new wrapping multi-step macro flow still needs its own visual acceptance.
 
 Build 19 supersedes build 18 in `/Applications/Keydial Studio.app`. It is signed, notarized, stapled, and accepted by Gatekeeper after a normal quit/install. All 14 profiles were byte-identical across installation; the separate Group 2 numeric test setup was then applied through the revision-checked MCP service. USB is ready and all three permissions remain allowed. The Custom numeric editor and its configured steps were inspected in the installed app.
+
+Build 20 is now installed, signed, notarized, stapled, and accepted by Gatekeeper after a normal quit/install. All 14 profiles were byte-identical across installation. The user-requested mixed Group 2 mapping was applied afterward through MCP: default arrows, Command+arrows, and Shift+arrows use native output; Option uses typed 0.01 steps and Control+Shift typed 100 steps. Each modifier rule now has an explicit Numeric option independent of the base shortcut. The installed editor was inspected with all five rows and immediate apply enabled.
+
+The optional immediate-apply mode sends Enter after verified text replacement, then attempts to restore focus on the exact same AX field. It rejects another editable target or changed window/app, and physical editing/context changes revoke its bounded restoration lease. No coordinate-click fallback is used. Live Rive commit/refocus and the mixed-output physical test are pending; the earlier all-numeric acceptance does not establish this new behavior.
 
 The latest separately notarized and stapled installer currently remains `release/Keydial Studio-0.5.0-build14-macOS.dmg`. SHA-256: `fdda57fa84b5caeec72277e46407192d8183b661ff3210811daa92333dca45b9`.
 

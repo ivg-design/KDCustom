@@ -70,16 +70,31 @@ struct SmartModifierRule: Codable, Equatable, Sendable {
     /// Exact physical modifier set required to select this rule.
     var modifiers: KeyModifiers
     var step: Double
-    /// Nil inherits the setting's base shortcut, if any.
+    /// Nil inherits the base shortcut only when inheritBaseShortcut is true.
     var shortcut: SmartShortcut?
+    var inheritBaseShortcut: Bool
 
     init(id: String = UUID().uuidString, name: String, modifiers: KeyModifiers,
-         step: Double, shortcut: SmartShortcut? = nil) {
+         step: Double, shortcut: SmartShortcut? = nil, inheritBaseShortcut: Bool = true) {
         self.id = id
         self.name = name
         self.modifiers = modifiers
         self.step = step
         self.shortcut = shortcut
+        self.inheritBaseShortcut = inheritBaseShortcut
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, modifiers, step, shortcut, inheritBaseShortcut
+    }
+    init(from decoder: Decoder) throws {
+        let data = try decoder.container(keyedBy: CodingKeys.self)
+        id = try data.decode(String.self, forKey: .id)
+        name = try data.decode(String.self, forKey: .name)
+        modifiers = try data.decode(KeyModifiers.self, forKey: .modifiers)
+        step = try data.decode(Double.self, forKey: .step)
+        shortcut = try data.decodeIfPresent(SmartShortcut.self, forKey: .shortcut)
+        inheritBaseShortcut = try data.decodeIfPresent(Bool.self, forKey: .inheritBaseShortcut) ?? true
     }
 }
 
@@ -101,6 +116,7 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
     var modifierRules: [SmartModifierRule]
     var fallbackToActions: Bool
     var writeMethod: NumericWriteMethod
+    var commitWithEnter: Bool
 
     init(direction: SmartDialDirection = .increase,
          detection: SmartDialDetection = .automatic,
@@ -111,7 +127,8 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
             .init(id: "shift", name: "Coarse", modifiers: .shift, step: 10)
          ],
          fallbackToActions: Bool = false,
-         writeMethod: NumericWriteMethod = .accessibility) {
+         writeMethod: NumericWriteMethod = .accessibility,
+         commitWithEnter: Bool = false) {
         self.direction = direction
         self.detection = detection
         self.step = step
@@ -119,10 +136,11 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
         self.modifierRules = modifierRules
         self.fallbackToActions = fallbackToActions
         self.writeMethod = writeMethod
+        self.commitWithEnter = commitWithEnter
     }
 
     private enum CodingKeys: String, CodingKey {
-        case direction, detection, step, shortcut, modifierRules, fallbackToActions, writeMethod
+        case direction, detection, step, shortcut, modifierRules, fallbackToActions, writeMethod, commitWithEnter
     }
     init(from decoder: Decoder) throws {
         let data = try decoder.container(keyedBy: CodingKeys.self)
@@ -134,6 +152,7 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
         modifierRules = try data.decodeIfPresent([SmartModifierRule].self, forKey: .modifierRules) ?? defaults.modifierRules
         fallbackToActions = try data.decodeIfPresent(Bool.self, forKey: .fallbackToActions) ?? defaults.fallbackToActions
         writeMethod = try data.decodeIfPresent(NumericWriteMethod.self, forKey: .writeMethod) ?? defaults.writeMethod
+        commitWithEnter = try data.decodeIfPresent(Bool.self, forKey: .commitWithEnter) ?? false
     }
 
     /// Unsupported combinations are deliberately inert; they never degrade to
@@ -142,7 +161,12 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
         guard physicalModifiers.subtracting(.supported).isEmpty else { return nil }
         if physicalModifiers.isEmpty { return SmartDialSelection(step: step, shortcut: shortcut) }
         guard let rule = modifierRules.first(where: { $0.modifiers == physicalModifiers }) else { return nil }
-        return SmartDialSelection(step: rule.step, shortcut: rule.shortcut ?? shortcut)
+        return SmartDialSelection(step: rule.step,
+            shortcut: rule.shortcut ?? (rule.inheritBaseShortcut ? shortcut : nil))
+    }
+
+    var hasNumericOutput: Bool {
+        shortcut == nil || modifierRules.contains { $0.shortcut == nil && !$0.inheritBaseShortcut }
     }
 }
 

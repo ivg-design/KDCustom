@@ -37,6 +37,7 @@ final class FocusedInputObserver {
         }
         worker.onFocusNotification = { [weak self] notificationGeneration in
             guard let self, self.generation == notificationGeneration else { return }
+            if self.numericLease.defersFocusNotifications() { return }
             self.invalidateForFocusChange()
         }
     }
@@ -75,6 +76,7 @@ final class FocusedInputObserver {
 
     func adjustNumeric(token: String, delta: Double, allowTextField: Bool,
                        writeMethod: NumericWriteMethod = .accessibility,
+                       commitWithEnter: Bool = false,
                        completion: @escaping @MainActor (NumericAdjustmentResult) -> Void) {
         guard enabled, snapshot.token == token,
               snapshot.kind != .unavailable, snapshot.kind != .secure else {
@@ -88,8 +90,9 @@ final class FocusedInputObserver {
                                                 token: token) else {
             completion(.cancelled); return
         }
-        let deadline = ProcessInfo.processInfo.systemUptime + 0.5
-        worker.adjustNumeric(ticket: ticket, delta: delta, writeMethod: writeMethod, deadline: deadline,
+        let deadline = ProcessInfo.processInfo.systemUptime + (commitWithEnter ? 0.9 : 0.5)
+        worker.adjustNumeric(ticket: ticket, delta: delta, writeMethod: writeMethod,
+                             commitWithEnter: commitWithEnter, deadline: deadline,
                              completion: completion)
     }
 
@@ -105,65 +108,6 @@ final class FocusedInputObserver {
         let empty = FocusSnapshot()
         snapshot = empty
         onChange?(empty)
-    }
-}
-
-/// Main-thread invalidation is synchronous even when an AX call occupies the
-/// serial worker. At most four dial requests can be queued or in flight.
-private final class NumericAdjustmentLease: @unchecked Sendable {
-    struct Ticket: Sendable {
-        let generation: UInt64
-        let epoch: UInt64
-        let token: String
-        let revision: UInt64
-    }
-
-    private let lock = NSLock()
-    private var current: Ticket?
-    private var revision: UInt64 = 0
-    private var pending = 0
-
-    func publish(generation: UInt64, epoch: UInt64, token: String) {
-        lock.lock(); defer { lock.unlock() }
-        if current?.generation == generation && current?.epoch == epoch && current?.token == token {
-            return
-        }
-        revision &+= 1
-        current = Ticket(generation: generation, epoch: epoch, token: token, revision: revision)
-    }
-
-    func invalidate() {
-        lock.lock(); defer { lock.unlock() }
-        revision &+= 1
-        current = nil
-    }
-
-    func cancelPending() {
-        lock.lock(); defer { lock.unlock() }
-        revision &+= 1
-        if let current {
-            self.current = Ticket(generation: current.generation, epoch: current.epoch,
-                                  token: current.token, revision: revision)
-        }
-    }
-
-    func reserve(generation: UInt64, epoch: UInt64, token: String) -> Ticket? {
-        lock.lock(); defer { lock.unlock() }
-        guard let current, current.generation == generation, current.epoch == epoch,
-              current.token == token, pending < 4 else { return nil }
-        pending += 1
-        return current
-    }
-
-    func isCurrent(_ ticket: Ticket) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        return current?.generation == ticket.generation && current?.epoch == ticket.epoch &&
-            current?.token == ticket.token && current?.revision == ticket.revision
-    }
-
-    func finish() {
-        lock.lock(); defer { lock.unlock() }
-        pending -= 1
     }
 }
 
@@ -247,6 +191,7 @@ private final class FocusAXWorker: @unchecked Sendable {
     }
 
     func adjustNumeric(ticket: NumericAdjustmentLease.Ticket, delta: Double, writeMethod: NumericWriteMethod,
+                       commitWithEnter: Bool,
                        deadline: TimeInterval,
                        completion: @escaping @MainActor (NumericAdjustmentResult) -> Void) {
         queue.async { [self] in
@@ -256,7 +201,8 @@ private final class FocusAXWorker: @unchecked Sendable {
             if writeMethod == .keyboard && observedPID == getpid() { result = .unsupported }
             else {
                 result = onAXThread(for: observedPID) {
-                    performNumericAdjustment(ticket: ticket, delta: delta, writeMethod: writeMethod, deadline: deadline)
+                    performNumericAdjustment(ticket: ticket, delta: delta, writeMethod: writeMethod,
+                                             commitWithEnter: commitWithEnter, deadline: deadline)
                 }
             }
             numericLease.finish()
@@ -273,6 +219,7 @@ private final class FocusAXWorker: @unchecked Sendable {
     }
 
     private func performNumericAdjustment(ticket: NumericAdjustmentLease.Ticket, delta: Double, writeMethod: NumericWriteMethod,
+                                          commitWithEnter: Bool,
                                           deadline: TimeInterval) -> NumericAdjustmentResult {
         guard numericLease.isCurrent(ticket),
               ProcessInfo.processInfo.systemUptime <= deadline,
@@ -344,11 +291,52 @@ private final class FocusAXWorker: @unchecked Sendable {
                   hasExpectedFocus(focused, app: app, pid: pid, deadline: deadline) else { return .cancelled }
             guard let actual = stringAttribute(kAXValueAttribute as CFString, from: focused),
                   NumericAdjustment.equalValues(actual, text) else { return .failed }
+            if commitWithEnter {
+                return commitAndRestore(focused, app: app, pid: pid, ticket: ticket,
+                                        text: text, output: keyboardOutput, deadline: deadline)
+            }
             return .applied
         }
         let status = AXUIElementSetAttributeValue(focused, kAXValueAttribute as CFString,
                                                   replacement)
         return status == .success ? .applied : .failed
+    }
+
+    private func commitAndRestore(_ field: AXUIElement, app: AXUIElement, pid: pid_t,
+                                  ticket: NumericAdjustmentLease.Ticket, text: String,
+                                  output: SystemActionOutput, deadline: TimeInterval) -> NumericAdjustmentResult {
+        guard let window = elementAttribute(kAXWindowAttribute as CFString, from: field),
+              hasExpectedFocus(field, app: app, pid: pid, deadline: deadline),
+              numericLease.beginFocusRestoration(ticket, deadline: deadline) else { return .cancelled }
+        defer { numericLease.endFocusRestoration(ticket) }
+        let submitted = DispatchQueue.main.sync {
+            numericLease.isCurrent(ticket) && output.smartShortcut(SmartShortcut(keyCode: 36))
+        }
+        guard submitted else { return .failed }
+        Thread.sleep(forTimeInterval: 0.06)
+        guard numericLease.isCurrent(ticket), hasExpectedApp(pid, deadline: deadline),
+              let currentWindow = elementAttribute(kAXFocusedWindowAttribute as CFString, from: app),
+              CFEqual(currentWindow, window) else { return .cancelled }
+        if !hasExpectedFocus(field, app: app, pid: pid, deadline: deadline) {
+            // Enter may return focus to a generic container. Never take it
+            // from another editable control, or restore by guessed coordinates.
+            if let current = elementAttribute(kAXFocusedUIElementAttribute as CFString, from: app) {
+                guard let role = stringAttribute(kAXRoleAttribute as CFString, from: current),
+                      [kAXGroupRole as String, kAXWindowRole as String, kAXUnknownRole as String].contains(role)
+                else { return .focusRestoreFailed }
+            }
+            guard let fieldWindow = elementAttribute(kAXWindowAttribute as CFString, from: field),
+                  CFEqual(fieldWindow, window), numericLease.isCurrent(ticket),
+                  ProcessInfo.processInfo.systemUptime <= deadline else { return .cancelled }
+            guard AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
+            else { return .focusRestoreFailed }
+            Thread.sleep(forTimeInterval: 0.06)
+        }
+        guard numericLease.isCurrent(ticket) else { return .cancelled }
+        guard hasExpectedFocus(field, app: app, pid: pid, deadline: deadline),
+              let actual = stringAttribute(kAXValueAttribute as CFString, from: field),
+              NumericAdjustment.equalValues(actual, text) else { return .focusRestoreFailed }
+        return .applied
     }
 
     private enum BoundRead {
@@ -370,6 +358,13 @@ private final class FocusAXWorker: @unchecked Sendable {
 
     private func hasExpectedFocus(_ focused: AXUIElement, app: AXUIElement, pid: pid_t,
                                   deadline: TimeInterval) -> Bool {
+        guard hasExpectedApp(pid, deadline: deadline) else { return false }
+        guard let current = elementAttribute(kAXFocusedUIElementAttribute as CFString, from: app),
+              CFEqual(current, focused), ProcessInfo.processInfo.systemUptime <= deadline else { return false }
+        return true
+    }
+
+    private func hasExpectedApp(_ pid: pid_t, deadline: TimeInterval) -> Bool {
         guard ProcessInfo.processInfo.systemUptime <= deadline else { return false }
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 0.12)
@@ -381,13 +376,14 @@ private final class FocusAXWorker: @unchecked Sendable {
         guard AXUIElementGetPid(frontmost as! AXUIElement, &frontmostPID) == .success,
               frontmostPID == pid,
               ProcessInfo.processInfo.systemUptime <= deadline else { return false }
-        var current: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString,
-                                            &current) == .success,
-              let current, CFGetTypeID(current) == AXUIElementGetTypeID(),
-              CFEqual(current, focused),
-              ProcessInfo.processInfo.systemUptime <= deadline else { return false }
         return true
+    }
+
+    private func elementAttribute(_ name: CFString, from element: AXUIElement) -> AXUIElement? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        return (raw as! AXUIElement)
     }
 
     private func installObserver(on app: AXUIElement, pid: pid_t) {

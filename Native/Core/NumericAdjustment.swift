@@ -7,6 +7,7 @@ enum NumericAdjustmentResult: Sendable {
     case unsupported
     case cancelled
     case failed
+    case focusRestoreFailed
 }
 
 /// Pure, bounded arithmetic for an explicitly requested dial adjustment.

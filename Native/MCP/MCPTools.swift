@@ -251,7 +251,7 @@ enum MCPTools {
     }
 
     private static func validateSmart(_ object: [String: Any]) throws {
-        let allowed: Set<String> = ["direction", "detection", "step", "shortcut", "modifierRules", "fallbackToActions", "writeMethod"]
+        let allowed: Set<String> = ["direction", "detection", "step", "shortcut", "modifierRules", "fallbackToActions", "writeMethod", "commitWithEnter"]
         guard Set(object.keys).isSubset(of: allowed) else {
             throw MCPInputError(reason: "smart contains an unexpected field")
         }
@@ -265,7 +265,7 @@ enum MCPTools {
             let required: Set<String> = ["id", "name", "modifiers", "step"]
             for rule in rules {
                 guard required.isSubset(of: Set(rule.keys)),
-                      Set(rule.keys).isSubset(of: required.union(["shortcut"])) else {
+                      Set(rule.keys).isSubset(of: required.union(["shortcut", "inheritBaseShortcut"])) else {
                     throw MCPInputError(reason: "smart modifier rule has missing or unexpected fields")
                 }
                 try validateSmartModifiers(rule["modifiers"])
@@ -356,12 +356,14 @@ enum MCPTools {
         "name": ["type": "string", "minLength": 1, "maxLength": 60],
         "modifiers": modifierSchema,
         "step": ["type": "number", "minimum": 0.000001, "maximum": 1_000_000],
-        "shortcut": smartShortcutSchema
+        "shortcut": smartShortcutSchema,
+        "inheritBaseShortcut": ["type": "boolean", "default": true]
     ], required: ["id", "name", "modifiers", "step"])
     private static let smartSchema = object([
         "direction": ["type": "string", "enum": ["increase", "decrease"]],
         "detection": ["type": "string", "enum": ["automatic", "numericField"]],
         "writeMethod": ["type": "string", "enum": ["accessibility", "keyboard"]],
+        "commitWithEnter": ["type": "boolean", "default": false],
         "step": ["type": "number", "minimum": 0.000001, "maximum": 1_000_000],
         "shortcut": smartShortcutSchema,
         "modifierRules": ["type": "array", "maxItems": 8, "items": smartModifierRuleSchema],

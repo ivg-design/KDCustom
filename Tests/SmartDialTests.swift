@@ -64,6 +64,43 @@ enum SmartDialTests {
               custom.selection(for: .shift) == SmartDialSelection(step: 20, shortcut: overrideShortcut),
               "Modifier rule inherits base shortcut unless it overrides it")
 
+        let legacyRule = try JSONDecoder().decode(SmartModifierRule.self, from:
+            Data(#"{"id":"legacy","name":"Fine","modifiers":524288,"step":0.01}"#.utf8))
+        check(legacyRule.inheritBaseShortcut, "Old rules preserve base-shortcut inheritance")
+        for code: UInt16 in [125, 126] {
+            let mixed = SmartDialSettings(shortcut: SmartShortcut(keyCode: code), modifierRules: [
+                .init(id: "command", name: "Tenths", modifiers: .command, step: 0.1,
+                      shortcut: SmartShortcut(keyCode: code, modifiers: .command)),
+                .init(id: "option", name: "Hundredths", modifiers: .option, step: 0.01,
+                      inheritBaseShortcut: false),
+                .init(id: "shift", name: "Tens", modifiers: .shift, step: 10,
+                      shortcut: SmartShortcut(keyCode: code, modifiers: .shift)),
+                .init(id: "control-shift", name: "Hundreds", modifiers: [.control, .shift], step: 100,
+                      inheritBaseShortcut: false)
+            ], writeMethod: .keyboard, commitWithEnter: true)
+            check(mixed.selection(for: [])?.shortcut == SmartShortcut(keyCode: code) &&
+                  mixed.selection(for: .command)?.shortcut == SmartShortcut(keyCode: code, modifiers: .command) &&
+                  mixed.selection(for: .shift)?.shortcut == SmartShortcut(keyCode: code, modifiers: .shift),
+                  "Native base, Command and Shift remain shortcut outputs in both directions")
+            check(mixed.selection(for: .option) == SmartDialSelection(step: 0.01, shortcut: nil) &&
+                  mixed.selection(for: [.control, .shift]) == SmartDialSelection(step: 100, shortcut: nil) &&
+                  mixed.selection(for: [.command, .shift]) == nil && mixed.hasNumericOutput,
+                  "Explicit numeric rules bypass the base shortcut; combinations match exactly")
+            let restoredMixed = try JSONDecoder().decode(SmartDialSettings.self, from: JSONEncoder().encode(mixed))
+            check(restoredMixed == mixed, "Mixed output selection survives profile persistence")
+            let mixedBinding = ControlBinding(controlID: .dial2CW, dialBehavior: .smart, smart: mixed)
+            let mixedObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(mixedBinding)) as! [String: Any]
+            try MCPTools.validate(name: "kdcustom_set_binding", arguments: [
+                "expectedRevision": "r1", "profileId": "global", "groupId": "group-1", "binding": mixedObject
+            ])
+            var malformed = mixedObject
+            var badSmart = malformed["smart"] as! [String: Any]
+            var badRules = badSmart["modifierRules"] as! [[String: Any]]
+            badRules[1]["inheritBaseShortcut"] = "false"
+            badSmart["modifierRules"] = badRules; malformed["smart"] = badSmart
+            rejectsMCP("numeric inheritance switch must be a boolean", malformed)
+        }
+
         var document = KeydialDocument()
         let dialIndex = document.profiles[0].groups[0].controls.firstIndex { $0.controlID == .dial1CCW }!
         document.profiles[0].groups[0].controls[dialIndex].dialBehavior = .smart
@@ -83,6 +120,7 @@ enum SmartDialTests {
         let partial = try JSONDecoder().decode(SmartDialSettings.self, from: Data("{}".utf8))
         check(partial == defaults, "Omitted Smart settings fields decode to defaults")
         check(partial.writeMethod == .accessibility, "Existing profiles never start typing into fields after upgrade")
+        check(!partial.commitWithEnter, "Existing numeric profiles keep explicit commit behavior")
         var typed = custom
         typed.writeMethod = .keyboard; typed.fallbackToActions = false
         let typedData = try JSONEncoder().encode(typed)

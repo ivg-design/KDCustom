@@ -67,6 +67,7 @@ final class StudioModel: ObservableObject {
         let profile: String
         let pid: pid_t?
         let allowText: Bool
+        let commitWithEnter: Bool
     }
     private var typedNumericContext: TypedNumericContext?
     private var typedNumericJob: UUID?
@@ -312,7 +313,8 @@ final class StudioModel: ObservableObject {
         let allowText = SmartDialHeuristics.allowsTextField(focus, detection: settings.detection)
         if settings.writeMethod == .keyboard {
             let context = TypedNumericContext(token: focus.token, revision: expectedRevision,
-                profile: expectedProfile, pid: expectedPID, allowText: allowText)
+                profile: expectedProfile, pid: expectedPID, allowText: allowText,
+                commitWithEnter: settings.commitWithEnter)
             if typedNumericContext != context {
                 cancelNumericWork(); typedNumericContext = context
             }
@@ -341,6 +343,7 @@ final class StudioModel: ObservableObject {
                 } else { self.record("Smart · field unavailable; no action") }
             case .cancelled: break
             case .failed: self.record("Smart · app did not confirm adjustment; no fallback sent")
+            case .focusRestoreFailed: self.record("Smart · field focus could not be restored")
             }
         }
     }
@@ -349,7 +352,8 @@ final class StudioModel: ObservableObject {
               let batch = typedNumericSteps.take() else { return }
         let job = UUID(); typedNumericJob = job
         focusObserver.adjustNumeric(token: context.token, delta: batch.delta,
-            allowTextField: context.allowText, writeMethod: .keyboard) { [weak self] result in
+            allowTextField: context.allowText, writeMethod: .keyboard,
+            commitWithEnter: context.commitWithEnter) { [weak self] result in
             guard let self, self.typedNumericJob == job else { return }
             self.reconcileForeground()
             guard self.output.enabled, self.typedNumericContext == context,
@@ -366,6 +370,8 @@ final class StudioModel: ObservableObject {
                 self.cancelNumericWork(); self.record("Smart · readable numeric text field required")
             case .failed:
                 self.cancelNumericWork(); self.record("Smart · text replacement not confirmed; stopped")
+            case .focusRestoreFailed:
+                self.cancelNumericWork(); self.record("Smart · value submitted; field focus could not be restored")
             case .cancelled: self.cancelNumericWork()
             }
         }

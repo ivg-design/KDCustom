@@ -73,7 +73,7 @@ struct BindingEditor: View {
                             Text("Fallback actions")
                             Text("\(binding.pressActions.count) steps").foregroundStyle(StudioTheme.mutedText)
                             Spacer()
-                            Text(binding.smart?.fallbackToActions == true && binding.smart?.shortcut == nil ? "Enabled" : "Inactive")
+                            Text(binding.smart?.fallbackToActions == true && binding.smart?.hasNumericOutput == true ? "Enabled" : "Inactive")
                                 .foregroundStyle(StudioTheme.mutedText)
                         }.font(StudioTheme.font(11))
                     }
