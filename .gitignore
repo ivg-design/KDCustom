@@ -1,0 +1,13 @@
+build/
+evidence/
+.DS_Store
+IMPLEMENTATION.md
+NATIVE-APP-ESTIMATE.md
+protocol/label-disassembly.txt
+*.dmg
+*.zip
+*.xcarchive
+*.p8
+*.p12
+.env
+.env.*
