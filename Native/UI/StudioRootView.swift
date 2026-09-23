@@ -308,8 +308,15 @@ private struct StudioSettingsView: View {
                         }
                     }
                 }
-                Button("Check keyboard output…") { OutputVerifier.shared.show() }
-                Button("Check Smart numeric input…") { SmartInputVerifier.shared.show() }
+                Button("Check keyboard output…") {
+                    model.showingSettings = false
+                    OutputVerifier.shared.onRecoveredKeyState = { [weak model] in model?.recoverDiagnosticKeyState() }
+                    DispatchQueue.main.async { OutputVerifier.shared.show() }
+                }
+                Button("Check Smart numeric input…") {
+                    model.showingSettings = false
+                    DispatchQueue.main.async { SmartInputVerifier.shared.show() }
+                }
                 Button("Export diagnostics…") { model.exportDiagnostics() }
                 DisclosureGroup("Connection diagnostics", isExpanded: $showDiagnostics) {
                     ScrollView {

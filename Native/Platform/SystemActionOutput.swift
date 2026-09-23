@@ -10,7 +10,7 @@ final class SystemActionOutput: ActionOutput {
     private let source = CGEventSource(stateID: .privateState)
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var physicalKeys = Set<UInt16>()
+    private var physical = PhysicalInputState()
     private(set) var observing = false
     var enabled = false
     /// Used only by the neutral in-app verifier; normal control output stays on the HID path.
@@ -22,7 +22,9 @@ final class SystemActionOutput: ActionOutput {
 
     func startObserving() {
         guard tap == nil else { return }
-        let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged]
+        let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged,
+                                   .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+                                   .otherMouseDown, .otherMouseUp]
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         let context = Unmanaged.passUnretained(self).toOpaque()
         tap = CGEvent.tapCreate(tap: .cghidEventTap, place: .headInsertEventTap,
@@ -40,13 +42,16 @@ final class SystemActionOutput: ActionOutput {
                     owner.observing = true
                 } else if event.getIntegerValueField(.eventSourceUserData) != SystemActionOutput.eventMarker {
                     let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
-                    if type == .keyDown { owner.physicalKeys.insert(code) }
-                    if type == .keyUp { owner.physicalKeys.remove(code) }
+                    if type == .keyDown { owner.physical.key(code, down: true, posted: false) }
+                    if type == .keyUp { owner.physical.key(code, down: false, posted: false) }
                     if type == .flagsChanged {
                         // HID state distinguishes left/right modifiers sharing one aggregate flag.
-                        if CGEventSource.keyState(.hidSystemState, key: code) {
-                            owner.physicalKeys.insert(code)
-                        } else { owner.physicalKeys.remove(code) }
+                        owner.physical.key(code, down: CGEventSource.keyState(.hidSystemState, key: code), posted: false)
+                    }
+                    if [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+                        .otherMouseDown, .otherMouseUp].contains(type) {
+                        let button = UInt32(clamping: event.getIntegerValueField(.mouseEventButtonNumber))
+                        owner.physical.button(button, down: [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(type), posted: false)
                     }
                 }
             }
@@ -62,12 +67,13 @@ final class SystemActionOutput: ActionOutput {
     func stopObserving() {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
         if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
-        tap = nil; runLoopSource = nil; physicalKeys.removeAll(); observing = false
+        tap = nil; runLoopSource = nil; physical = PhysicalInputState(); observing = false
     }
-    private func seedPhysicalState() {
-        physicalKeys = Set((UInt16(0)...UInt16(127)).filter { CGEventSource.keyState(.hidSystemState, key: $0) })
+    func seedPhysicalState() {
+        physical.seed(keys: Set((UInt16(0)...UInt16(127)).filter { CGEventSource.keyState(.hidSystemState, key: $0) }),
+                      buttons: Set((UInt32(0)...2).filter { CGEventSource.buttonState(.hidSystemState, button: CGMouseButton(rawValue: $0)!) }))
     }
-    func physicalKeyIsDown(_ code: UInt16) -> Bool { CGEventSource.keyState(.hidSystemState, key: code) }
+    func physicalKeyIsDown(_ code: UInt16) -> Bool { physical.keys.contains(code) }
     func physicalMouseButtonIsDown(_ button: MouseButton) -> Bool {
         let native: CGMouseButton
         switch button {
@@ -75,14 +81,14 @@ final class SystemActionOutput: ActionOutput {
         case .right: native = .right
         case .middle: native = .center
         }
-        return CGEventSource.buttonState(.hidSystemState, button: native)
+        return physical.buttons.contains(native.rawValue)
     }
     private var physicalFlags: CGEventFlags {
         var flags = CGEventFlags()
         for (codes, flag) in [([UInt16(55), 54], CGEventFlags.maskCommand),
                               ([56, 60], .maskShift), ([58, 61], .maskAlternate),
                               ([59, 62], .maskControl), ([63], .maskSecondaryFn)] {
-            if codes.contains(where: physicalKeys.contains) { flags.insert(flag) }
+            if codes.contains(where: physical.keys.contains) { flags.insert(flag) }
         }
         // Caps lock is a toggle, not an owned hold.
         if CGEventSource.flagsState(.hidSystemState).contains(.maskAlphaShift) { flags.insert(.maskAlphaShift) }
@@ -130,6 +136,14 @@ final class SystemActionOutput: ActionOutput {
         event.setIntegerValueField(.eventSourceUserData, value: Self.eventMarker)
         if let targetProcessID { event.postToPid(targetProcessID) }
         else { event.post(tap: .cghidEventTap) }
+        switch event.type {
+        case .keyDown, .keyUp, .flagsChanged:
+            let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+            physical.key(code, down: !release, posted: true)
+        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp:
+            physical.button(UInt32(clamping: event.getIntegerValueField(.mouseEventButtonNumber)), down: !release, posted: true)
+        default: break
+        }
         onOutput?(summary)
         return true
     }

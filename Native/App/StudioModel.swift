@@ -243,6 +243,7 @@ final class StudioModel: ObservableObject {
         focusObserver.cancelNumericAdjustments()
         engine.cancelAll(reason: reason)
     }
+    func recoverDiagnosticKeyState() { output.seedPhysicalState() }
     private func input(_ control: ControlID, down: Bool) {
         reconcileForeground()
         expireFocusIfNeeded()

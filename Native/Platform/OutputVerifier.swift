@@ -3,25 +3,31 @@ import ApplicationServices
 import Carbon
 import Foundation
 
-/// A private-process delivery check. It never changes the user's profiles or
-/// sends its test events to the global event stream.
+/// Exercises production HID delivery with this disposable window in front.
+/// It never changes profiles and stops as soon as the window loses focus.
 @MainActor
 final class OutputVerifier: NSObject, NSWindowDelegate {
     static let shared = OutputVerifier()
+    var onRecoveredKeyState: (() -> Void)?
+    private let testedCodes: [UInt16] = [0, 4, 5, 30, 33, 46, 49, 54, 55, 56, 58, 59, 60, 61, 62, 63, 125, 126]
 
     private struct EventSignature: Codable, Equatable {
         let kind: String
         let code: UInt16
         let command: Bool
+        let shift: Bool
+        let option: Bool
     }
 
     private struct ObservedEvent: Codable {
         let kind: String
         let code: UInt16
         let command: Bool
+        let shift: Bool
+        let option: Bool
         let seconds: Double
 
-        var signature: EventSignature { .init(kind: kind, code: code, command: command) }
+        var signature: EventSignature { .init(kind: kind, code: code, command: command, shift: shift, option: option) }
     }
 
     private struct CheckResult: Codable {
@@ -40,7 +46,7 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
     }
 
     private enum Case: Int, CaseIterable {
-        case commandUp, heldDial, delayedMacro, cancelledHold
+        case commandUp, heldDial, delayedMacro, cancelledHold, smartArrows, smartCommand, smartBrush
 
         var name: String {
             switch self {
@@ -48,6 +54,9 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
             case .heldDial: "Inner dial held Command + Down"
             case .delayedMacro: "Macro completes after button release"
             case .cancelledHold: "Cancellation releases Space before A"
+            case .smartArrows: "Smart arrows repeat with balanced releases"
+            case .smartCommand: "Smart Command + Up repeats"
+            case .smartBrush: "Smart bracket shortcuts and modifiers"
             }
         }
 
@@ -57,12 +66,13 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
             case .heldDial: 0.62
             case .delayedMacro: 0.75
             case .cancelledHold: 0.70
+            case .smartArrows, .smartCommand, .smartBrush: 0.30
             }
         }
 
         var expected: [EventSignature] {
-            func e(_ kind: String, _ code: UInt16, _ command: Bool = false) -> EventSignature {
-                .init(kind: kind, code: code, command: command)
+            func e(_ kind: String, _ code: UInt16, _ command: Bool = false, shift: Bool = false, option: Bool = false) -> EventSignature {
+                .init(kind: kind, code: code, command: command, shift: shift, option: option)
             }
             switch self {
             case .commandUp:
@@ -74,6 +84,14 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
                 return [e("down", 4), e("up", 4), e("down", 5), e("up", 5)]
             case .cancelledHold:
                 return [e("down", 49), e("up", 49)]
+            case .smartArrows:
+                return [126, 126, 125, 125].flatMap { [e("down", $0), e("up", $0)] }
+            case .smartCommand:
+                return [126, 126].flatMap { [e("down", $0, true), e("up", $0, true)] }
+            case .smartBrush:
+                return [e("down", 30), e("up", 30), e("down", 30), e("up", 30),
+                        e("down", 33, option: true), e("up", 33, option: true),
+                        e("down", 30, shift: true), e("up", 30, shift: true)]
             }
         }
     }
@@ -118,15 +136,18 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         root.layer?.backgroundColor = NSColor(calibratedWhite: 0.09, alpha: 1).cgColor
         window.contentView = root
 
-        let title = NSTextField(labelWithString: "Private output check")
+        let title = NSTextField(labelWithString: "Keyboard output check")
         title.font = .systemFont(ofSize: 20, weight: .medium)
         title.textColor = .white
         let explanation = NSTextField(wrappingLabelWithString:
-            "Runs four keyboard-only checks against this window. Events are addressed to KDCustom's own process; this does not prove delivery to Rive or another app. Release all physical keys before running.")
+            "Runs seven checks through normal HID delivery into this disposable window. Stops if focus changes. This does not prove Rive behavior. Release all physical keys before running.")
         explanation.textColor = NSColor(calibratedWhite: 0.72, alpha: 1)
         explanation.font = .systemFont(ofSize: 12)
         let button = NSButton(title: "Run check", target: self, action: #selector(runCheck))
         button.bezelStyle = .rounded
+        let reset = NSButton(title: "Reset stuck test keys", target: self, action: #selector(resetTestKeys))
+        reset.bezelStyle = .rounded
+        reset.toolTip = "Release all physical keyboard keys first. Clears only keys used by this diagnostic."
         let status = NSTextField(labelWithString: "Ready · Accessibility permission required")
         status.font = .systemFont(ofSize: 12, weight: .medium)
         status.textColor = NSColor(calibratedRed: 0.82, green: 0.59, blue: 0.29, alpha: 1)
@@ -146,7 +167,7 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         log.string = "Only events bearing KDCustom's output marker appear here.\n"
         scroll.documentView = log
 
-        for view in [title, explanation, button, status, receiver, scroll] {
+        for view in [title, explanation, button, reset, status, receiver, scroll] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
@@ -158,10 +179,12 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
             explanation.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
             button.topAnchor.constraint(equalTo: explanation.bottomAnchor, constant: 15),
             button.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            status.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            status.leadingAnchor.constraint(equalTo: button.trailingAnchor, constant: 14),
+            reset.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            reset.leadingAnchor.constraint(equalTo: button.trailingAnchor, constant: 14),
+            status.topAnchor.constraint(equalTo: button.bottomAnchor, constant: 8),
+            status.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             status.trailingAnchor.constraint(lessThanOrEqualTo: root.trailingAnchor, constant: -22),
-            receiver.topAnchor.constraint(equalTo: button.bottomAnchor, constant: 13),
+            receiver.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 8),
             receiver.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             receiver.widthAnchor.constraint(equalToConstant: 1),
             receiver.heightAnchor.constraint(equalToConstant: 1),
@@ -181,6 +204,22 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         window.makeFirstResponder(receiver)
     }
 
+    @objc private func resetTestKeys() {
+        guard !running, window?.isKeyWindow == true,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid(),
+              AXIsProcessTrusted(), !IsSecureEventInputEnabled() else { return }
+        let stuck = testedCodes.filter { CGEventSource.keyState(.hidSystemState, key: $0) }
+        let recovery = SystemActionOutput()
+        recovery.enabled = true
+        for code in stuck { recovery.key(code: code, down: false, modifiers: []) }
+        recovery.enabled = false
+        append("Reset \(stuck.count) test keys. Physical keyboard keys must be released before resetting.")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.onRecoveredKeyState?()
+            self?.statusLabel?.stringValue = "Test key state reset · ready to run"
+        }
+    }
+
     @objc private func runCheck() {
         guard !running, let window, window.isKeyWindow else { return }
         guard AXIsProcessTrusted(), !IsSecureEventInputEnabled() else {
@@ -191,7 +230,6 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
                                        observed: [], detail: detail)])
             return
         }
-        let testedCodes: [UInt16] = [0, 4, 5, 49, 54, 55, 125, 126]
         guard !testedCodes.contains(where: { CGEventSource.keyState(.hidSystemState, key: $0) }) else {
             let detail = "Release physical keyboard keys used by the check, then retry."
             statusLabel?.stringValue = detail
@@ -205,9 +243,17 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         observed.removeAll()
         running = true
         runButton?.isEnabled = false
-        logView?.string = "Private PID target: \(getpid()). Starting checks.\n"
+        logView?.string = "Production HID delivery, disposable window target: \(getpid()). Starting checks.\n"
         let output = SystemActionOutput()
-        output.targetProcessID = getpid()
+        output.expectedForegroundPID = getpid()
+        output.startObserving()
+        guard output.observing else {
+            output.stopObserving()
+            running = false
+            runButton?.isEnabled = true
+            statusLabel?.stringValue = "Input Monitoring is required for the output check."
+            return
+        }
         output.enabled = true
         self.output = output
         engine = ActionEngine(output: output)
@@ -265,6 +311,15 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
                                                         .init(.delay(milliseconds: 500)), .keyTap(0)],
                                          buttonBehavior: .hold)
             engine.handle(control: .key3, isDown: true, binding: binding, now: caseStart)
+        case .smartArrows:
+            output?.smartShortcut(.init(keyCode: 126, repeatCount: 2))
+            output?.smartShortcut(.init(keyCode: 125, repeatCount: 2))
+        case .smartCommand:
+            output?.smartShortcut(.init(keyCode: 126, modifiers: .command, repeatCount: 2))
+        case .smartBrush:
+            output?.smartShortcut(.init(keyCode: 30, repeatCount: 2))
+            output?.smartShortcut(.init(keyCode: 33, modifiers: .option))
+            output?.smartShortcut(.init(keyCode: 30, modifiers: .shift))
         }
     }
 
@@ -300,6 +355,11 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         var passed = actual == expected
         var detail = passed ? "Observed the exact marked-event sequence." :
             "Marked-event sequence differed from the expected key/down/up and Command flags."
+        let testedCodes = Set(expected.map(\.code))
+        if testedCodes.contains(where: { CGEventSource.keyState(.hidSystemState, key: $0) }) {
+            passed = false
+            detail = "A tested key remained down in the shared HID state."
+        }
         if test == .delayedMacro, let first = observed.first(where: { $0.code == 4 && $0.kind == "down" }),
            let second = observed.first(where: { $0.code == 5 && $0.kind == "down" }) {
             if second.seconds - first.seconds < 0.45 {
@@ -327,6 +387,8 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         }
         let item = ObservedEvent(kind: kind, code: event.keyCode,
                                  command: event.modifierFlags.contains(.command),
+                                 shift: event.modifierFlags.contains(.shift),
+                                 option: event.modifierFlags.contains(.option),
                                  seconds: ProcessInfo.processInfo.systemUptime - caseStart)
         observed.append(item)
         append("  \(kind) · key \(item.code) · Command \(item.command ? "on" : "off")")
@@ -337,6 +399,7 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         timer?.invalidate(); timer = nil
         engine?.cancelAll(reason: "Output verifier stopped")
         output?.enabled = false
+        output?.stopObserving()
         output = nil; engine = nil
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
         eventMonitor = nil
@@ -350,14 +413,14 @@ final class OutputVerifier: NSObject, NSWindowDelegate {
         running = false
         runButton?.isEnabled = true
         let passed = !results.isEmpty && results.allSatisfy(\.passed)
-        statusLabel?.stringValue = passed ? "Passed · private-process event delivery" : "Failed · inspect event log"
+        statusLabel?.stringValue = passed ? "Passed · HID delivery into diagnostic window" : "Failed · inspect event log"
         writeReport(checks: results)
     }
 
     private func writeReport(checks: [CheckResult]) {
         let report = Report(generatedAt: ISO8601DateFormatter().string(from: Date()),
                             passed: !checks.isEmpty && checks.allSatisfy(\.passed) && checks.count == Case.allCases.count,
-                            scope: "Private PID routing into KDCustom only; this does not prove global delivery or behavior in Rive.",
+                            scope: "Production HID delivery into a disposable KDCustom window; not Rive/Adobe behavior or physical device capture.",
                             checks: checks)
         do {
             let directory = ProfileStore().directoryURL
