@@ -1,4 +1,5 @@
 build/
+release/
 evidence/
 .DS_Store
 IMPLEMENTATION.md

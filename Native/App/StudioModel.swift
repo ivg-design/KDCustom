@@ -456,7 +456,12 @@ final class StudioModel: ObservableObject {
         switch response.value {
         case .batteryBucket(let v): value = v; display = "\(v)% bucket"
         case .brightnessLevel(let v): value = v; display = "Level \(v)"
-        case .dormantLevel(let v): value = v; display = "Level \(v)"
+        case .dormantLevel(let v):
+            value = v
+            // Huion documents minutes for these four raw timeout values. The
+            // fifth firmware value (120) is not mapped to its documented None option.
+            if let minutes = [1: 15, 2: 30, 3: 60, 4: 90][v] { display = "\(minutes) min" }
+            else { display = "Unmapped timeout (raw 120)" }
         case .rotationDegrees(let v): value = v; display = "\(v)°"
         case .unrecognized: value = nil; display = "Unrecognized"
         }

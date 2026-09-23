@@ -30,7 +30,7 @@ app,root=map(Path,sys.argv[1:])
 info={'CFBundleIdentifier':'life.mograph.KeydialStudio',
 'CFBundleName':'KDCustom','CFBundleDisplayName':'KDCustom',
 'CFBundleExecutable':'KeydialStudio','CFBundlePackageType':'APPL',
-'CFBundleShortVersionString':'0.4.1','CFBundleVersion':'8',
+'CFBundleShortVersionString':'0.4.1','CFBundleVersion':'9',
 'LSMinimumSystemVersion':'14.0','NSPrincipalClass':'NSApplication',
 'NSHighResolutionCapable':True,'CFBundleIconFile':'AppIcon','ProbeRepositoryPath':str(root),
 'NSBluetoothAlwaysUsageDescription':'Connect to your Huion Keydial for button, dial, and screen control.'}

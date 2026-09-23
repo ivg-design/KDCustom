@@ -74,7 +74,7 @@ final class StudioDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
     private func updateStatus() {
         guard let model else { return }
-        let title = "\(model.effectiveProfile.name) · \(model.outputStatus)"
+        let title = "\(model.activeAppName) · \(model.effectiveProfile.name) · \(model.outputStatus)"
         if statusLine?.title != title { statusLine?.title = title }
         let pauseTitle = model.paused ? "Resume controls" : "Pause controls"
         if pauseItem?.title != pauseTitle { pauseItem?.title = pauseTitle }

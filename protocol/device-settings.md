@@ -16,7 +16,7 @@ All offsets in this table refer to the payload **after** the two-byte transport 
 | --- | --- | --- | --- |
 | Battery | `D1`, `QueryBattery` `0x1000625d0` | Uses payload bytes 0 and 1; see below. Returns a displayed 20/40/60/80/100 bucket, not a proven true percentage. | None found here. |
 | Brightness | `D9`, `QueryBrightness` `0x1000629d4` | Payload byte 0: `01→1`, `02→2`, `04→3`, `08→4`, `10→5`; any other value → 0/unknown. | `D7` up, `Brightness_Up` `0x100062a8c`; `D8` down, `Brightness_Down` `0x100062b00`. Each method returns true only when its post-prefix payload byte 0 is `01`. |
-| Dormant/sleep | `DC`, `QueryDormantTime` `0x100062e58` | Payload byte 0: `0F→1`, `1E→2`, `3C→3`, `5A→4`, `78→5`; any other value → 0/unknown. Values are 15, 30, 60, 90, 120 numerically; the unit and observed screen effect still need live confirmation. | `DA` up, `DormantTime_Up` `0x100062f08`; `DB` down, `DormantTime_Down` `0x100062f7c`. Each returns true only for post-prefix payload byte 0 `01`. |
+| Dormant/sleep | `DC`, `QueryDormantTime` `0x100062e58` | Payload byte 0: `0F→1`, `1E→2`, `3C→3`, `5A→4`, `78→5`; any other value → 0/unknown. Values are 15, 30, 60, 90, 120 numerically. The Huion manual documents 15/30/60/90 minutes and a None option; raw 120 remains unmapped. Actual sleep timing still needs live confirmation. | `DA` up, `DormantTime_Up` `0x100062f08`; `DB` down, `DormantTime_Down` `0x100062f7c`. Each returns true only for post-prefix payload byte 0 `01`. |
 | Rotation | `DE`, `QueryRotateDegree` `0x100063058` | Payload byte 0 `00/01/02/03` → `0°/90°/180°/270°`; values above `03` → 0 in the driver, but should be unknown to a replacement. | `DD` advances one step, `RotateDegree` `0x100062ff0`. It discards the reply. The direction and wrap behavior need live confirmation. |
 
 `QueryBattery` has two code paths. When payload byte 1 equals decimal 100 (`0x64`), it buckets payload byte 0 as `0–20→20`, `21–40→40`, `41–60→60`, `61–80→80`, `81–100→100`; `101–255` fall back to 20. Otherwise it treats payload byte 0 as a status code: `01→20`, `02–04→40`, `05–10 hex→60`, `11–7F hex→80`, `80 hex→100`, and other values → 20. The meaning of the second byte and these buckets is not independently established. Preserve both bytes and avoid presenting this as calibrated battery percentage until compared to device behavior.
@@ -36,3 +36,11 @@ The single-step methods give the most bounded physical test: after C9/C8 control
 ## Live rotation cycle correction
 
 The production USB check observed consecutive `DE` payload values `3 → 4 → 1 → 2` after individual `DD` steps, ending at the restored baseline `2` (180°). The firmware uses `4` for the full-turn/zero orientation; the app normalizes it to 0°, retaining 0 as an equivalent decoder input. Values outside 0–4 remain unrecognized. Human comparison established that 270° places the dials below the readable display; the UI therefore rotates its dials-left artwork by `180° - reportedAngle`. This presentation transform is separate from packet decoding.
+
+## Documented sleep options and brightness boundary
+
+Huion's [K40 English manual](https://driverdl.huion.com/instruction/Keydial_Remote/User_Manual_Keydial_Remote_K40_EN.pdf), section 5.2.7, page 21, documents None, 15 minutes, 30 minutes, 1 hour, and 1.5 hours. This establishes the units for the four numeric timeout values. It does not establish whether the driver's raw value 120 means None; the app leaves that fifth value explicitly unmapped. No timed sleep experiment has been completed.
+
+The manual describes automatic dimming during sleep (page 3), but does not document a brightness control in its device settings. Static D7/D8/D9 commands alone do not establish a supported K40 brightness feature. Live D9 reads timed out twice, and brightness controls remain hidden without valid readback.
+
+The same manual, section 5.2.6, describes a brief group-name screen during group changes. The stable display remains the circled number and key labels. That transient name screen has not been separately confirmed on the acceptance device; its absence from a later photograph does not prove it is unsupported.
