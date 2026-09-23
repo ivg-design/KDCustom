@@ -25,7 +25,8 @@ struct SmartDialEditor: View {
                 if settings.writeMethod == .keyboard {
                     Picker("Apply changes", selection: $settings.commitMethod) {
                         Text("Leave input open · apply manually").tag(NumericCommitMethod.manual)
-                        Text("Native arrow · keep editing").tag(NumericCommitMethod.nativeArrow)
+                        Text("Tab → Shift+Tab · keep editing").tag(NumericCommitMethod.tabReturn)
+                        Text("Native arrow · experimental").tag(NumericCommitMethod.nativeArrow)
                         Text("Enter · restore focus").tag(NumericCommitMethod.enter)
                     }.font(StudioTheme.font(11))
                     if settings.commitMethod == .nativeArrow {
@@ -99,10 +100,12 @@ struct SmartDialEditor: View {
         switch settings.commitMethod {
         case .manual:
             return "Types the calculated value. Press Enter when finished if the app requires it."
+        case .tabReturn:
+            return "Applies with Tab and returns with Shift+Tab. Stops if focus does not return to the original field."
         case .nativeArrow:
-            return "Applies each numeric update through the app's arrow-key behavior and checks the final value. No Enter or refocusing."
+            return "Tests applying through a compensated arrow step. Failed in the tested Rive field; use manual apply there."
         case .enter:
-            return "Submits with Enter and tries to restore focus. Rive closes its input; use Native arrow there."
+            return "Submits with Enter and tries to restore focus. Rive closes its input and did not restore focus; use manual apply there."
         }
     }
 

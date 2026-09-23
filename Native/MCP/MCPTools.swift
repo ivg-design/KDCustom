@@ -115,8 +115,8 @@ enum MCPTools {
              "Read active app, effective profile, device connection, and permissions as observed by the app.",
              empty, readOnly: true),
         tool("kdcustom_get_focused_input", "runtime.focus", "Get focused input",
-             "Read current focus metadata and kind without field value or selected text.",
-             empty, readOnly: true),
+             "Read focus metadata without field values. Optional panelCapture starts a two-minute in-memory Rive AX/click diagnostic or stops it; results are historical, never automatic routes.",
+             object(["panelCapture": ["type": "string", "enum": ["start", "stop"]]], required: []), readOnly: true),
         tool("kdcustom_get_device_settings", "device.getSettings", "Get observed device settings",
              "Read cached settings with availability and observation time; unavailable is distinct from zero.",
              empty, readOnly: true),
@@ -165,6 +165,7 @@ enum MCPTools {
                 throw MCPInputError(reason: "Unknown device setting")
             }
             if key == "direction" && !["up", "down"].contains(string) { throw MCPInputError(reason: "Unknown rule direction") }
+            if key == "panelCapture" && !["start", "stop"].contains(string) { throw MCPInputError(reason: "Unknown panel capture command") }
         }
         if name == "kdcustom_update_profile" &&
             arguments["name"] == nil && arguments["appBundleIdentifier"] == nil {
@@ -367,7 +368,7 @@ enum MCPTools {
         "detection": ["type": "string", "enum": ["automatic", "numericField"]],
         "writeMethod": ["type": "string", "enum": ["accessibility", "keyboard"]],
         "commitWithEnter": ["type": "boolean", "default": false],
-        "commitMethod": ["type": "string", "enum": ["manual", "enter", "nativeArrow"]],
+        "commitMethod": ["type": "string", "enum": ["manual", "enter", "nativeArrow", "tabReturn"]],
         "nativeArrowStep": ["type": "number", "minimum": 0.000001, "maximum": 1_000_000],
         "step": ["type": "number", "minimum": 0.000001, "maximum": 1_000_000],
         "shortcut": smartShortcutSchema,

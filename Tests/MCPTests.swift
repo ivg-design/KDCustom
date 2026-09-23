@@ -71,6 +71,11 @@ enum MCPTests {
               send(server, call(60, "kdcustom_get_focused_input", [:])) != nil &&
               calls.last?.0 == "runtime.focus",
               "focused-input metadata tool is read-only and routed to the app")
+        check(send(server, call(61, "kdcustom_get_focused_input", ["panelCapture": "start"])) != nil &&
+              calls.last?.1["panelCapture"] as? String == "start", "bounded panel inspection reaches the app")
+        let beforeInvalidPanel = calls.count
+        check(result(send(server, call(62, "kdcustom_get_focused_input", ["panelCapture": "forever"])))?["isError"] as? Bool == true &&
+              calls.count == beforeInvalidPanel, "unbounded panel capture is rejected before the app")
 
         check(code(send(server, request(7, "unknown"))) == -32601,
               "unknown methods return method-not-found")

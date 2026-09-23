@@ -24,6 +24,14 @@ struct FocusRulesView: View {
                 }
             }
             observation
+            if model.editorProfile.appBundleIdentifier == "app.rive.editor" {
+                HStack {
+                    Button("Inspect Rive panels · 2 minutes") { model.startPanelInspection() }
+                    Button("Stop inspection") { model.stopPanelInspection() }
+                    Text(model.panelInspectionStatus).font(StudioTheme.font(10))
+                        .foregroundStyle(StudioTheme.secondaryText)
+                }
+            }
             Divider()
             if model.editorProfile.appBundleIdentifier == nil {
                 Text("Add an application profile to create focused-input rules. Global bindings remain the fallback.")

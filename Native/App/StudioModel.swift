@@ -35,6 +35,7 @@ final class StudioModel: ObservableObject {
     @Published private(set) var focusedInput = FocusSnapshot()
     @Published private(set) var lastExternalFocus: FocusSnapshot?
     @Published private(set) var lastExternalFocusAt: Date?
+    @Published private(set) var panelInspectionStatus = "Panel inspection is off"
     @Published var appearance = UserDefaults.standard.string(forKey: "appearance") ?? "dark" {
         didSet { UserDefaults.standard.set(appearance, forKey: "appearance"); applyAppearance() }
     }
@@ -46,6 +47,7 @@ final class StudioModel: ObservableObject {
     let device = DeviceController()
     private let output = SystemActionOutput()
     private let focusObserver = FocusedInputObserver()
+    private let panelDiagnostics = RivePanelDiagnostics()
     private var focusConfirmedAt: TimeInterval = 0
     private var appIcons: [String: NSImage] = [:]
     private lazy var engine = ActionEngine(output: output)
@@ -96,6 +98,16 @@ final class StudioModel: ObservableObject {
         engine.onEvent = { [weak self] in self?.record($0) }
         output.onObservationLost = { [weak self] in self?.cancelActions(reason: "Input observer interrupted") }
         output.onPhysicalEditingInput = { [weak self] in self?.cancelNumericWork() }
+        output.onPhysicalPointerDown = { [weak self] in self?.panelDiagnostics.pointerDown($0) }
+        output.onExternalNavigation = { [weak self] code, down, source, flags in
+            guard let self, self.activeBundleID == "app.rive.editor" else { return }
+            self.panelDiagnostics.note("externalNavigation", "key=\(code) \(down ? "down" : "up") source=\(source) flags=\(flags)")
+        }
+        output.onOutput = { [weak self] event in
+            guard let self, self.activeBundleID == "app.rive.editor" else { return }
+            self.panelDiagnostics.note("output", event)
+        }
+        panelDiagnostics.onChange = { [weak self] in self?.panelInspectionStatus = $0 }
         focusObserver.setKeyboardOutput(output)
         device.onControl = { [weak self] control, down in self?.input(control, down: down) }
         device.onStatus = { [weak self] in self?.record($0) }
@@ -203,6 +215,7 @@ final class StudioModel: ObservableObject {
         reconcileDevice()
     }
     func stop() {
+        panelDiagnostics.stop()
         cancelActions(reason: "App closing")
         focusObserver.stop()
         output.enabled = false
@@ -219,7 +232,7 @@ final class StudioModel: ObservableObject {
         cancelActions(reason: "Session changed")
         sessionAvailable = available
         refreshOutputGate(reason: "Session changed")
-        if !available { device.stop(); deviceStarted = false }
+        if !available { panelDiagnostics.stop(); device.stop(); deviceStarted = false }
         else { reconcileDevice(); foregroundChanged(NSWorkspace.shared.frontmostApplication) }
     }
     private func foregroundChanged(_ app: NSRunningApplication?) {
@@ -231,6 +244,7 @@ final class StudioModel: ObservableObject {
         output.expectedForegroundPID = app?.processIdentifier
         activeAppName = app?.localizedName ?? "No active app"
         activeBundleID = app?.bundleIdentifier
+        panelDiagnostics.foregroundChanged(app)
         observeFocus()
         contextChanged(reason: "Foreground application changed")
     }
@@ -255,6 +269,7 @@ final class StudioModel: ObservableObject {
         onStatusChange?()
     }
     private func cancelActions(reason: String) {
+        panelDiagnostics.note("cancel", reason)
         cancelNumericWork()
         engine.cancelAll(reason: reason)
     }
@@ -265,9 +280,20 @@ final class StudioModel: ObservableObject {
         focusObserver.cancelNumericAdjustments()
     }
     func recoverDiagnosticKeyState() { output.seedPhysicalState() }
+    func startPanelInspection() {
+        guard accessibilityAllowed, sessionAvailable, !secureInput else {
+            panelInspectionStatus = "Panel inspection requires Accessibility and an unlocked session"
+            return
+        }
+        panelDiagnostics.start()
+    }
+    func stopPanelInspection() { panelDiagnostics.stop() }
     private func input(_ control: ControlID, down: Bool) {
         reconcileForeground()
         expireFocusIfNeeded()
+        if activeBundleID == "app.rive.editor" {
+            panelDiagnostics.note("device", "\(control.rawValue) \(down ? "down" : "up") modifiers=\(output.physicalModifiers.rawValue)")
+        }
         if down { activeControls.insert(control) } else if !control.isDial { activeControls.remove(control) }
         if control.isDial {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self?.activeControls.remove(control) }
@@ -299,6 +325,7 @@ final class StudioModel: ObservableObject {
             return
         }
         let focus = focusedInput
+        recordDialDecision(binding.controlID, modifiers: modifiers, shortcut: nil, result: "Numeric selected")
         if focus.kind == .unavailable {
             if settings.fallbackToActions {
                 var fallback = binding; fallback.dialBehavior = .perStep
@@ -345,6 +372,8 @@ final class StudioModel: ObservableObject {
             case .cancelled: break
             case .failed: self.record("Smart · app did not confirm adjustment; no fallback sent")
             case .focusRestoreFailed: self.record("Smart · field focus could not be restored")
+            case .draftNotConfirmed: self.record("Smart · draft not confirmed; arrow not sent")
+            case .arrowCommitNotConfirmed: self.record("Smart · native arrow result not confirmed; stopped")
             }
         }
     }
@@ -373,6 +402,10 @@ final class StudioModel: ObservableObject {
                 self.cancelNumericWork(); self.record("Smart · text replacement not confirmed; stopped")
             case .focusRestoreFailed:
                 self.cancelNumericWork(); self.record("Smart · value submitted; field focus could not be restored")
+            case .draftNotConfirmed:
+                self.cancelNumericWork(); self.record("Smart · draft not confirmed; arrow not sent")
+            case .arrowCommitNotConfirmed:
+                self.cancelNumericWork(); self.record("Smart · native arrow result not confirmed; stopped")
             case .cancelled: self.cancelNumericWork()
             }
         }
@@ -425,6 +458,7 @@ final class StudioModel: ObservableObject {
         if bluetoothAllowed != bluetooth { bluetoothAllowed = bluetooth }
         if loginEnabled != login { loginEnabled = login }
         let secure = IsSecureEventInputEnabled()
+        if (!accessibility || secure) && panelDiagnostics.armed { panelDiagnostics.stop() }
         if secure != secureInput { cancelActions(reason: "Secure input changed"); secureInput = secure }
         let huion = NSWorkspace.shared.runningApplications.contains {
             ($0.bundleIdentifier?.lowercased().contains("huion") == true) ||
@@ -448,6 +482,9 @@ final class StudioModel: ObservableObject {
     private func focusChanged(_ snapshot: FocusSnapshot) {
         focusConfirmedAt = ProcessInfo.processInfo.systemUptime
         guard snapshot != focusedInput else { return }
+        if activeBundleID == "app.rive.editor" {
+            panelDiagnostics.note("focus", "\(snapshot.kind.rawValue) · \(snapshot.role ?? "unavailable")")
+        }
         cancelActions(reason: "Focused control changed")
         activeControls.removeAll()
         focusedInput = snapshot
@@ -680,17 +717,26 @@ final class StudioModel: ObservableObject {
                                  "raw": response.raw]
     }
     func record(_ event: String) {
+        if event.hasPrefix("Smart ·") { panelDiagnostics.note("smart", event) }
         recentEvents.append(event)
         if recentEvents.count > 100 { recentEvents.removeFirst(recentEvents.count - 100) }
     }
     private func handleAgent(_ operation: String, arguments: [String: Any]) throws -> [String: Any] {
         switch operation {
         case "runtime.focus":
-            guard arguments.isEmpty else { throw MCPInputError(reason: "Unexpected focus arguments") }
+            guard Set(arguments.keys).isSubset(of: ["panelCapture"]) else { throw MCPInputError(reason: "Unexpected focus arguments") }
+            if let raw = arguments["panelCapture"] {
+                guard let command = raw as? String else { throw MCPInputError(reason: "panelCapture must be start or stop") }
+                switch command {
+                case "start": startPanelInspection()
+                case "stop": panelDiagnostics.stop()
+                default: throw MCPInputError(reason: "panelCapture must be start or stop")
+                }
+            }
             expireFocusIfNeeded()
             let current = try JSONSerialization.jsonObject(with: JSONEncoder().encode(focusedInput))
             let last: Any = try lastExternalFocus.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()
-            return ["current": current, "lastObserved": last,
+            return ["current": current, "lastObserved": last, "rivePanelDiagnostics": panelDiagnostics.read(),
                     "lastObservedAt": lastExternalFocusAt.map { ISO8601DateFormatter().string(from: $0) } as Any? ?? NSNull(),
                     "matchedRuleId": activeContextRule?.id as Any? ?? NSNull(),
                     "dialGroupId": activeContextRule?.targetGroupID ?? effectiveGroup.id,
@@ -701,7 +747,9 @@ final class StudioModel: ObservableObject {
                     "activeBundleIdentifier": activeBundleID as Any? ?? NSNull(),
                     "effectiveProfileId": effectiveProfile.id, "effectiveGroupId": effectiveGroup.id,
                     "lockedProfileId": lockedProfileID as Any? ?? NSNull(), "paused": paused,
-                    "dialDiagnostics": ["physicalModifiers": output.physicalModifiers.rawValue, "recentDecisions": recentDialDecisions],
+                    "dialDiagnostics": ["physicalModifiers": output.physicalModifiers.rawValue,
+                                        "recentDecisions": recentDialDecisions,
+                                        "recentSmartEvents": Array(recentEvents.filter { $0.hasPrefix("Smart ·") }.suffix(20))],
                     "outputStatus": outputStatus, "device": ["state": connection, "transport": transport, "ready": ready],
                     "permissions": ["accessibility": accessibilityAllowed, "inputMonitoring": inputAllowed, "bluetooth": bluetoothAllowed]]
         case "device.getSettings":

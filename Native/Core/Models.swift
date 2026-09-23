@@ -112,6 +112,7 @@ enum NumericCommitMethod: String, Codable, Sendable {
     case manual
     case enter
     case nativeArrow
+    case tabReturn
 }
 
 struct SmartDialSettings: Codable, Equatable, Sendable {

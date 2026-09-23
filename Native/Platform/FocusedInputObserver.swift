@@ -91,7 +91,8 @@ final class FocusedInputObserver {
                                                 token: token) else {
             completion(.cancelled); return
         }
-        let deadline = ProcessInfo.processInfo.systemUptime + (commitMethod == .enter ? 0.9 : 0.5)
+        let restoresFocus = commitMethod == .enter || commitMethod == .tabReturn
+        let deadline = ProcessInfo.processInfo.systemUptime + (restoresFocus ? 0.9 : 0.65)
         worker.adjustNumeric(ticket: ticket, delta: delta, writeMethod: writeMethod,
                              commitMethod: commitMethod, nativeArrowStep: nativeArrowStep, deadline: deadline,
                              completion: completion)
@@ -290,15 +291,37 @@ private final class FocusAXWorker: @unchecked Sendable {
                   let current = stringAttribute(kAXValueAttribute as CFString, from: focused),
                   NumericAdjustment.equalValues(original, current) else { return .cancelled }
             let sent = DispatchQueue.main.sync {
-                numericLease.isCurrent(ticket) && keyboardOutput.numericText(arrowPlan?.draft ?? text,
-                                                                             commitKeyCode: arrowPlan?.keyCode)
+                numericLease.isCurrent(ticket) && keyboardOutput.numericText(arrowPlan?.draft ?? text)
             }
             guard sent else { return .failed }
             Thread.sleep(forTimeInterval: 0.08)
             guard numericLease.isCurrent(ticket),
                   hasExpectedFocus(focused, app: app, pid: pid, deadline: deadline) else { return .cancelled }
+            if let arrowPlan {
+                // Flutter must accept the replacement before its arrow handler
+                // reads the edit buffer. Match the successful physical macro's
+                // pause and verify the draft before committing through an arrow.
+                guard let draft = stringAttribute(kAXValueAttribute as CFString, from: focused),
+                      NumericAdjustment.equalValues(draft, arrowPlan.draft),
+                      numericLease.isCurrent(ticket),
+                      hasExpectedFocus(focused, app: app, pid: pid, deadline: deadline) else { return .draftNotConfirmed }
+                let committed = DispatchQueue.main.sync {
+                    numericLease.isCurrent(ticket) &&
+                        keyboardOutput.smartShortcut(SmartShortcut(keyCode: arrowPlan.keyCode))
+                }
+                guard committed else { return .failed }
+                Thread.sleep(forTimeInterval: 0.08)
+                guard numericLease.isCurrent(ticket),
+                      hasExpectedFocus(focused, app: app, pid: pid, deadline: deadline) else { return .cancelled }
+            }
             guard let actual = stringAttribute(kAXValueAttribute as CFString, from: focused),
-                  NumericAdjustment.equalValues(actual, text) else { return .failed }
+                  NumericAdjustment.equalValues(actual, text) else {
+                return arrowPlan == nil ? .failed : .arrowCommitNotConfirmed
+            }
+            if commitMethod == .tabReturn {
+                return commitThroughTab(focused, app: app, pid: pid, ticket: ticket,
+                                        text: text, output: keyboardOutput, deadline: deadline)
+            }
             if commitMethod == .enter {
                 return commitAndRestore(focused, app: app, pid: pid, ticket: ticket,
                                         text: text, output: keyboardOutput, deadline: deadline)
@@ -308,6 +331,39 @@ private final class FocusAXWorker: @unchecked Sendable {
         let status = AXUIElementSetAttributeValue(focused, kAXValueAttribute as CFString,
                                                   replacement)
         return status == .success ? .applied : .failed
+    }
+
+    private func commitThroughTab(_ field: AXUIElement, app: AXUIElement, pid: pid_t,
+                                  ticket: NumericAdjustmentLease.Ticket, text: String,
+                                  output: SystemActionOutput, deadline: TimeInterval) -> NumericAdjustmentResult {
+        guard let window = elementAttribute(kAXWindowAttribute as CFString, from: field),
+              hasExpectedFocus(field, app: app, pid: pid, deadline: deadline),
+              numericLease.beginFocusRestoration(ticket, deadline: deadline) else { return .cancelled }
+        defer { numericLease.endFocusRestoration(ticket) }
+        let submitted = DispatchQueue.main.sync {
+            numericLease.isCurrent(ticket) && output.smartShortcut(SmartShortcut(keyCode: 48))
+        }
+        guard submitted else { return .failed }
+        Thread.sleep(forTimeInterval: 0.08)
+        guard numericLease.isCurrent(ticket), hasExpectedApp(pid, deadline: deadline),
+              let currentWindow = elementAttribute(kAXFocusedWindowAttribute as CFString, from: app),
+              CFEqual(currentWindow, window),
+              let next = elementAttribute(kAXFocusedUIElementAttribute as CFString, from: app),
+              let nextRole = stringAttribute(kAXRoleAttribute as CFString, from: next),
+              [kAXTextFieldRole as String, kAXTextAreaRole as String].contains(nextRole),
+              stringAttribute(kAXSubroleAttribute as CFString, from: next) != (kAXSecureTextFieldSubrole as String),
+              !CFEqual(next, field), hasExpectedFocus(next, app: app, pid: pid, deadline: deadline)
+        else { return .focusRestoreFailed }
+        let returned = DispatchQueue.main.sync {
+            numericLease.isCurrent(ticket) && output.smartShortcut(SmartShortcut(keyCode: 48, modifiers: .shift))
+        }
+        guard returned else { return .focusRestoreFailed }
+        Thread.sleep(forTimeInterval: 0.08)
+        guard numericLease.isCurrent(ticket) else { return .cancelled }
+        guard hasExpectedFocus(field, app: app, pid: pid, deadline: deadline),
+              let actual = stringAttribute(kAXValueAttribute as CFString, from: field),
+              NumericAdjustment.equalValues(actual, text) else { return .focusRestoreFailed }
+        return .applied
     }
 
     private func commitAndRestore(_ field: AXUIElement, app: AXUIElement, pid: pid_t,

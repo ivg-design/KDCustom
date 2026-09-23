@@ -146,6 +146,15 @@ enum SmartDialTests {
         try MCPTools.validate(name: "kdcustom_set_binding", arguments: [
             "expectedRevision": "r1", "profileId": "global", "groupId": "group-1", "binding": typedObject
         ])
+        var tabBinding = typedBinding
+        tabBinding.smart!.commitMethod = .tabReturn
+        let tabData = try JSONEncoder().encode(tabBinding)
+        check(try JSONDecoder().decode(ControlBinding.self, from: tabData) == tabBinding,
+              "Tab-return strategy round-trips without changing the mixed rules")
+        try MCPTools.validate(name: "kdcustom_set_binding", arguments: [
+            "expectedRevision": "r1", "profileId": "global", "groupId": "group-1",
+            "binding": try JSONSerialization.jsonObject(with: tabData)
+        ])
         for (key, badValue): (String, Any) in [("commitWithEnter", true), ("commitMethod", "unknown"),
                                                ("nativeArrowStep", "1"), ("nativeArrowStep", 0),
                                                ("nativeArrowStep", 1_000_001)] {

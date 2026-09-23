@@ -19,6 +19,8 @@ final class SystemActionOutput: ActionOutput {
     var expectedForegroundPID: pid_t?
     var onObservationLost: (() -> Void)?
     var onPhysicalEditingInput: (() -> Void)?
+    var onPhysicalPointerDown: ((CGPoint) -> Void)?
+    var onExternalNavigation: ((UInt16, Bool, Int64, UInt64) -> Void)?
     var onOutput: ((String) -> Void)?
 
     func startObserving() {
@@ -45,7 +47,14 @@ final class SystemActionOutput: ActionOutput {
                     if [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel].contains(type) {
                         owner.onPhysicalEditingInput?()
                     }
+                    if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(type) {
+                        owner.onPhysicalPointerDown?(event.location)
+                    }
                     let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+                    if (type == .keyDown || type == .keyUp), [36, 48, 53, 76, 123, 124, 125, 126].contains(code) {
+                        owner.onExternalNavigation?(code, type == .keyDown,
+                            event.getIntegerValueField(.eventSourceUnixProcessID), event.flags.rawValue)
+                    }
                     if type == .keyDown { owner.physical.key(code, down: true, posted: false) }
                     if type == .keyUp { owner.physical.key(code, down: false, posted: false) }
                     if type == .flagsChanged {
@@ -168,16 +177,10 @@ final class SystemActionOutput: ActionOutput {
 
     /// Numeric Smart selectors are not part of the text being inserted.
     /// This uses the same HID text path as ordinary text macros.
-    func numericText(_ value: String, commitKeyCode: UInt16? = nil) -> Bool {
+    func numericText(_ value: String) -> Bool {
         guard value.utf8.count <= 64, NumericAdjustment.equalValues(value, value),
               !physicalKeyIsDown(0) else { return false }
-        if let commitKeyCode {
-            guard [125, 126].contains(commitKeyCode), !physicalKeyIsDown(commitKeyCode) else { return false }
-        }
-        guard postText(value, flags: physicalFlags.intersection(.maskAlphaShift)) else { return false }
-        // Queue the compensating arrow immediately after the text; avoid
-        // leaving an offset draft waiting through an additional timer.
-        return commitKeyCode.map { smartShortcut(SmartShortcut(keyCode: $0)) } ?? true
+        return postText(value, flags: physicalFlags.intersection(.maskAlphaShift))
     }
 
     private func postText(_ value: String, flags: CGEventFlags) -> Bool {
