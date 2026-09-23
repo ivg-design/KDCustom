@@ -44,3 +44,7 @@ Huion's [K40 English manual](https://driverdl.huion.com/instruction/Keydial_Remo
 The manual describes automatic dimming during sleep (page 3), but does not document a brightness control in its device settings. Static D7/D8/D9 commands alone do not establish a supported K40 brightness feature. Live D9 reads timed out twice, and brightness controls remain hidden without valid readback.
 
 The same manual, section 5.2.6, describes a brief group-name screen during group changes. The stable display remains the circled number and key labels. That transient name screen has not been separately confirmed on the acceptance device; its absence from a later photograph does not prove it is unsupported.
+
+## USB full-battery observation
+
+On the acceptance K40, USB D1 returned `[6, 3, 100, 0, 0, 0]` while the user reported a full battery icon. The generic driver status-code branch interpreted that payload as 80, causing the mismatch. The decoder now recognizes exactly this observed USB payload `[100, 0, 0, 0]` as the Full/100 display bucket. It does not extrapolate a linear USB percentage format or apply the exception to Bluetooth. Regression fixtures preserve the transport distinction; other buckets remain approximate and charging state remains unverified.

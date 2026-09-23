@@ -75,6 +75,14 @@ enum K40DeviceCommands {
             guard raw[1] == index.rawValue else { return nil }
         }
         let payload = Array(raw.dropFirst(2))
+        // Live USB 64 00 00 00 was compared with the physical OLED at Full.
+        // The older driver's status-code branch incorrectly buckets it at 80.
+        // Keep this correction limited to the observed transport and payload;
+        // it does not establish a linear percentage scale for other reports.
+        if transport == .usb, index == .battery, payload == [100, 0, 0, 0] {
+            return Response(transport: transport, index: index, raw: raw,
+                            payload: payload, value: .batteryBucket(100))
+        }
         return Response(transport: transport, index: index, raw: raw,
                         payload: payload, value: decodePayload(payload, for: index))
     }

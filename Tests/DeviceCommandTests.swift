@@ -39,6 +39,8 @@ enum DeviceCommandTests {
         check(Commands.decode(usb([20, 100]), for: .battery, transport: .usb)?.value == .batteryBucket(20), "battery percent threshold")
         check(Commands.decode(usb([81, 100]), for: .battery, transport: .usb)?.value == .batteryBucket(100), "battery percent upper bucket")
         check(Commands.decode(usb([0x80, 0]), for: .battery, transport: .usb)?.value == .batteryBucket(100), "battery status code")
+        check(Commands.decode([6, 3, 100, 0, 0, 0], for: .battery, transport: .usb)?.value == .batteryBucket(100), "physical OLED full agrees with observed USB report")
+        check(Commands.decode(ble(.battery, [100, 0, 0, 0]), for: .battery, transport: .bluetooth)?.value == .batteryBucket(80), "USB correction does not reinterpret unverified BLE status format")
         check(Commands.decode(usb([255, 100]), for: .battery, transport: .usb)?.value == .unrecognized, "battery out of range")
 
         // The real E8 response failed the USB descriptor check. Unrecognized

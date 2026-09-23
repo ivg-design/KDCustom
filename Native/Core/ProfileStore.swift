@@ -122,6 +122,33 @@ struct ProfileStore {
             guard groupIDs.contains(profile.selectedGroupID) else {
                 throw invalid("selected group missing in \(profile.id)")
             }
+            guard profile.contextRules.count <= 32 else {
+                throw invalid("profile \(profile.id) has more than 32 focus rules")
+            }
+            if profile.id == document.globalProfileID && !profile.contextRules.isEmpty {
+                throw invalid("global profile cannot have focus rules")
+            }
+            var ruleIDs = Set<String>()
+            for rule in profile.contextRules {
+                guard validID(rule.id), ruleIDs.insert(rule.id).inserted else {
+                    throw invalid("empty, malformed, or duplicate focus rule ID in \(profile.id)")
+                }
+                guard validName(rule.name) else { throw invalid("focus rule name in \(profile.id)") }
+                guard groupIDs.contains(rule.targetGroupID) else {
+                    throw invalid("focus rule \(rule.id) targets a missing group")
+                }
+                guard rule.hasCriterion else {
+                    throw invalid("focus rule \(rule.id) needs a kind, role, identifier, or label criterion")
+                }
+                if let kind = rule.kind, kind == .secure || kind == .unavailable {
+                    throw invalid("focus rule \(rule.id) cannot target a secure or unavailable field")
+                }
+                guard validCriterion(rule.role, maximumBytes: 128),
+                      validCriterion(rule.identifier, maximumBytes: 256),
+                      validCriterion(rule.labelContains, maximumBytes: 160) else {
+                    throw invalid("focus rule \(rule.id) has an empty or oversized criterion")
+                }
+            }
         }
         guard globalCount == 1 else { throw invalid("global fallback profile is missing") }
     }
@@ -152,11 +179,59 @@ struct ProfileStore {
         if binding.controlID.isDial && binding.buttonBehavior != .pressRelease {
             throw invalid("button behavior on dial \(binding.controlID.rawValue)")
         }
+        if binding.dialBehavior == .smart && binding.smart == nil {
+            throw invalid("smart dial settings are missing in \(binding.controlID.rawValue)")
+        }
+        // Dormant settings must remain valid so switching modes cannot activate
+        // malformed shortcuts or numeric steps from a previously saved draft.
+        if let smart = binding.smart { try validate(smart, for: binding.controlID) }
         for step in binding.pressActions + binding.releaseActions { try validate(step) }
         let expandedSteps = (binding.pressActions + binding.releaseActions).reduce(0) { $0 + $1.repeatCount }
         guard expandedSteps * binding.macroRepeatCount <= 10_000 else {
             throw invalid("expanded macro exceeds 10000 steps in \(binding.controlID.rawValue)")
         }
+    }
+
+    private func validate(_ smart: SmartDialSettings, for control: ControlID) throws {
+        guard validSmartStep(smart.step) else {
+            throw invalid("smart step must be finite and 0.000001...1000000 in \(control.rawValue)")
+        }
+        if let shortcut = smart.shortcut { try validate(shortcut, for: control) }
+        guard smart.modifierRules.count <= 8 else {
+            throw invalid("smart dial has more than eight modifier rules in \(control.rawValue)")
+        }
+        var ids = Set<String>()
+        var triggers = Set<KeyModifiers>()
+        for rule in smart.modifierRules {
+            guard validID(rule.id), ids.insert(rule.id).inserted else {
+                throw invalid("smart modifier rule ID is malformed or duplicated in \(control.rawValue)")
+            }
+            guard (1...60).contains(rule.name.count), rule.name.utf8.count <= 120,
+                  !rule.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !rule.name.contains("\0") else {
+                throw invalid("smart modifier rule name is empty or too long in \(control.rawValue)")
+            }
+            guard !rule.modifiers.isEmpty,
+                  rule.modifiers.subtracting(.supported).isEmpty,
+                  triggers.insert(rule.modifiers).inserted else {
+                throw invalid("smart modifier trigger is empty, unsupported, or duplicated in \(control.rawValue)")
+            }
+            guard validSmartStep(rule.step) else {
+                throw invalid("smart modifier step must be finite and 0.000001...1000000 in \(control.rawValue)")
+            }
+            if let shortcut = rule.shortcut { try validate(shortcut, for: control) }
+        }
+    }
+
+    private func validate(_ shortcut: SmartShortcut, for control: ControlID) throws {
+        guard shortcut.keyCode <= 255, (1...100).contains(shortcut.repeatCount),
+              shortcut.modifiers.subtracting(.supported).isEmpty else {
+            throw invalid("smart shortcut key, modifiers, or repeat count in \(control.rawValue)")
+        }
+    }
+
+    private func validSmartStep(_ step: Double) -> Bool {
+        step.isFinite && (0.000_001...1_000_000).contains(step)
     }
 
     private func validate(_ step: ActionStep) throws {
@@ -222,6 +297,13 @@ struct ProfileStore {
 
     private func validName(_ name: String) -> Bool {
         (1...80).contains(name.utf8.count) && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !name.contains("\0")
+    }
+
+    private func validCriterion(_ value: String?, maximumBytes: Int) -> Bool {
+        guard let value else { return true }
+        return (1...maximumBytes).contains(value.utf8.count) &&
+            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !value.contains("\0")
     }
 
     private func validGroupName(_ name: String) -> Bool {

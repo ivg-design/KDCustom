@@ -1,6 +1,6 @@
 # Verification status
 
-Development checkpoint: 2026-09-22, KDCustom 0.4.1 (build 9). The native controller is implemented and being exercised on one Apple Silicon Mac with one K40. This is not a claim of full firmware parity or a published release.
+Development checkpoint: 2026-09-22, KDCustom 0.5.0 (source build 12; installed build 11). The native controller is implemented and being exercised on one Apple Silicon Mac with one K40. This is not a claim of full firmware parity or a published release.
 
 ## Observed in the installed app
 
@@ -14,11 +14,22 @@ Development checkpoint: 2026-09-22, KDCustom 0.4.1 (build 9). The native control
 - The reversible Huion handoff was exercised: Return to Huion stopped and paused KDCustom, and launched Huion; Use KDCustom stopped Huion and reconnected USB. The saved Huion configuration hash was unchanged.
 - Sleep readback is displayed as 15 minutes on the acceptance device. Huion documents 15/30/60/90-minute options, but timing has not been measured and the fifth firmware value remains unmapped.
 
+## Latest 0.5.0 checks
+
+- All 15 focused suites passed after Smart model, numeric arithmetic, rule ordering, cancellation and MCP integration. The final source builds with warnings as errors and verifies its Developer ID signature.
+- Installed 0.5.0 retained all three permissions and USB readiness. The observed USB battery reply now displays Full. The original 14 profiles and all user mappings were compared against the pre-update snapshot and preserved; the temporary QA profile was removed.
+- Installed MCP discovery returns 19 tools. Complete Smart bindings round-trip through the private bridge; focus-rule atomic batch creation, priority changes and metadata reads work. Codex's global `kdcustom` stdio entry points to the stable installed executable.
+- Live UI inspection confirmed sidebar app icons, revised outlines, near-edge OLED status, dial assignment labels and the compact three-step flow. Command+Down appeared directly in the shortcut field; a recorded Command+Z chord stayed visible while recording continued. Focus-rule editing left the stored default group unchanged. Final visual approval remains with the user.
+- A new isolated numeric diagnostic initially exposed an own-process AppKit AX threading crash in build 10. Build 11 routes own-process AX access to the main queue and no longer crashed during the retry. The guarded numeric write did not complete while macOS reported a system notification as foreground. Build 12 adds an explicit foreground preflight and restricts the diagnostic to its disposable field identifier. **The live numeric diagnostic has not passed**, and actual Rive/Adobe field support remains unverified.
+- Smart configuration, decimal math, unknown modifier combinations, metadata hints and engine hold ownership have deterministic tests. These do not establish target-app compatibility, physical modifier-selector behavior, or numeric write acceptance in external applications. Smart mode is opt-in; existing user bindings were not converted.
+
 ## Local delivery
 
-The installed `/Applications/Keydial Studio.app` is version **0.4.1 (9)** with bundle identity `life.mograph.KeydialStudio`. Its Developer ID signature, stapled ticket, and Gatekeeper acceptance were verified after installation. The separately notarized and stapled installer is `release/Keydial Studio-0.4.1-build9-macOS.dmg` (local, ignored by Git).
+The previously completed `/Applications/Keydial Studio.app` package was version **0.4.1 (9)** with bundle identity `life.mograph.KeydialStudio`. Its Developer ID signature, stapled ticket, and Gatekeeper acceptance were verified after installation. The separately notarized and stapled installer is `release/Keydial Studio-0.4.1-build9-macOS.dmg` (local, ignored by Git).
 
 SHA-256: `76e46649bdc54a4e61f936cfc86bcd1ea02731adf02e6fe9df3c8757f65b1e0f`.
+
+The current installed app is **0.5.0 (11)**, signed and USB-ready at its last unlocked check. **0.5.0 (12)** is built and signature-verified in `build/Keydial Studio.app`, but is not installed or notarized. Notarization returned “No Keychain password item found for profile: notary”; shortly afterward native UI access reported the Mac locked. The previously working credential needs to be rechecked after unlock, not replaced speculatively. UI-driven quit/install and final checks must also wait for unlock. No new installer is claimed.
 
 The source repository is public; no binary GitHub release has been published. The package is a tested acceptance build, with the hardware limits below still open.
 
@@ -36,4 +47,4 @@ These tests use deterministic fixtures and sinks where appropriate. They do not 
 - Battery is a vendor display bucket. Charging state and the fifth sleep timeout value are not decoded conclusively. The documented timeout units are minutes; actual timed sleep behavior remains untested.
 - Brightness readback timed out twice over BLE; no brightness mutation was attempted. Treat brightness as unsupported until evidence changes.
 - Abrupt process termination has no independently verified watchdog guarantee for synthesized holds. Pause, emergency release, normal exit, and observed context boundaries have explicit cleanup.
-- Final user visual review, login after an actual logout/reboot, and a hands-on background-control check remain acceptance gates. Packaging is complete.
+- Final user visual review, login after an actual logout/reboot, and a hands-on background-control check remain acceptance gates. New-build notarization and installation remain open as described above.

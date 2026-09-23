@@ -91,6 +91,33 @@ final class SystemActionOutput: ActionOutput {
     private func flags(_ modifiers: KeyModifiers) -> CGEventFlags {
         CGEventFlags(rawValue: modifiers.rawValue).union(physicalFlags)
     }
+
+    var physicalModifiers: KeyModifiers {
+        KeyModifiers(rawValue: physicalFlags.rawValue).intersection(.supported)
+    }
+
+    /// The physical selector (for example Option) is consumed only for these
+    /// marked key events. No physical modifier-up event is synthesized.
+    @discardableResult
+    func smartShortcut(_ shortcut: SmartShortcut) -> Bool {
+        guard enabled, !physicalKeyIsDown(shortcut.keyCode),
+              ![54, 55, 56, 58, 59, 60, 61, 62, 63].contains(shortcut.keyCode) else { return false }
+        let exact = CGEventFlags(rawValue: shortcut.modifiers.rawValue)
+            .union(physicalFlags.intersection(.maskAlphaShift))
+        for _ in 0..<shortcut.repeatCount {
+            guard !physicalKeyIsDown(shortcut.keyCode) else { return false }
+            let down = CGEvent(keyboardEventSource: source, virtualKey: shortcut.keyCode, keyDown: true)
+            down?.flags = exact
+            guard post(down, summary: "Smart shortcut down") else { return false }
+            // A physical press may arrive after our down event. Its eventual
+            // physical release owns cleanup; do not interrupt that hold.
+            guard !physicalKeyIsDown(shortcut.keyCode) else { return true }
+            let up = CGEvent(keyboardEventSource: source, virtualKey: shortcut.keyCode, keyDown: false)
+            up?.flags = exact
+            guard post(up, summary: "Smart shortcut up", release: true) else { return false }
+        }
+        return true
+    }
     @discardableResult
     private func post(_ event: CGEvent?, summary: String, release: Bool = false) -> Bool {
         guard enabled, AXIsProcessTrusted(), let event else { return false }

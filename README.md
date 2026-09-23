@@ -2,7 +2,7 @@
 
 KDCustom is an independent native macOS 14+ controller for the Huion Keydial Remote K40. The SwiftUI studio edits application-specific profiles, six groups per profile, eight keys, two group buttons, and both directions of both dials. It supports shortcuts, held keys, bounded macros, mouse/scroll/media actions, and temporary OLED key labels. Closing the studio window leaves the user-session controller running in the menu bar.
 
-The app detects the foreground application's bundle identifier and uses its profile, with a global fallback. A manual profile lock is available in the studio and menu bar. Editing a profile does not activate it. On context changes, pause, disconnect, sleep, or shutdown, the action engine cancels pending work and releases its synthesized holds. The native UI includes an interactive device photo, direction-specific dial selection, a macro editor, light/dark appearance, profile import/export and backup restoration, diagnostics export, and an optional login launch. The supplied device photo is unchanged; the app icon is original vector artwork.
+The app detects the foreground application's bundle identifier and uses its profile, with a global fallback. A manual profile lock is available in the studio and menu bar. Editing a profile does not activate it. On context changes, pause, disconnect, sleep, or shutdown, the action engine cancels pending work and releases its synthesized holds. The native UI includes an interactive device photo, direction-specific dial selection, a macro editor, light/dark appearance, profile import/export and backup restoration, diagnostics export, and an optional login launch. The supplied device photo is unchanged; the app icon uses generated artwork with a matching vector menu-bar mark.
 
 ## Build and run
 
@@ -19,6 +19,12 @@ Omit `--install` to build only `build/Keydial Studio.app`; `--install` copies th
 Grant Accessibility and Input Monitoring to the installed app before expecting shortcut output. Bluetooth permission is needed for the BLE transport. The app checks these permissions in Settings. To avoid competing device control, it suspends its device connection while Huion is running; Settings offers **Use KDCustom** and **Return to Huion**. Returning pauses KDCustom, stops its device controller, and launches `/Applications/HuionKeyboard.app` if present, without changing Huion's saved configuration. Resume KDCustom explicitly after switching back.
 
 Profiles are stored at `~/Library/Application Support/KeydialStudio/profiles.json` with a previous validated version at `profiles.json.bak`. Importing a KDCustom JSON file replaces the document only after review and schema validation. **Import from Huion** reads a selected `EKeySetting.dt` without writing it. Because Huion configuration indices have not been proven to match physical keys, that flow requires a reviewed eight-key/two-dial mapping and direction choice, shows skipped actions and unresolved applications, and asks for final confirmation before replacing KDCustom profiles.
+
+## Smart dials and interface
+
+Application profiles switch automatically by foreground bundle identity; their icons appear in the sidebar. The menu bar provides profile/group selection, pause, emergency release, reconnect, settings and status. Smart mode adds configurable numeric increments and keyboard modifier rules, with app/control hints and custom shortcuts. Ordered focus rules can select different dial assignments without changing button mappings. See [Smart dials and limits](docs/SMART-DIALS.md).
+
+The control inspector uses a compact numbered macro flow with one expanded step. Shortcut recording displays the full combination in the field. Device previews use the supplied photograph, orientation-aware layouts, button-shaped outlines and visible per-direction dial labels. The generated icon master and packaging notes are in [Resources/ICON-ARTWORK.md](Resources/ICON-ARTWORK.md).
 
 ## Agent configuration
 

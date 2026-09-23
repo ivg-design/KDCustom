@@ -79,13 +79,31 @@ enum MCPTools {
                     required: ["profileId", "groupId", "controlId"]),
              readOnly: true),
         tool("kdcustom_set_binding", "bindings.set", "Set binding",
-             "Replace one complete ControlBinding, including press/release macro steps and behavior.",
+             "Replace one complete ControlBinding, including press/release macro steps and optional Smart dial settings.",
              object(["expectedRevision": string, "profileId": string, "groupId": string,
                      "binding": bindingSchema],
                     required: ["expectedRevision", "profileId", "groupId", "binding"]),
              readOnly: false),
+        tool("kdcustom_list_context_rules", "contextRules.list", "List focus rules",
+             "Read the ordered dial-only focus rules for one application profile.",
+             object(["profileId": string], required: ["profileId"]), readOnly: true),
+        tool("kdcustom_set_context_rule", "contextRules.set", "Set focus rule",
+             "Append or replace one focus rule. First enabled match overrides only the four dial bindings.",
+             object(["expectedRevision": string, "profileId": string, "rule": focusRuleSchema],
+                    required: ["expectedRevision", "profileId", "rule"]),
+             readOnly: false),
+        tool("kdcustom_delete_context_rule", "contextRules.delete", "Delete focus rule",
+             "Delete one focus rule from an application profile.",
+             object(["expectedRevision": string, "profileId": string, "ruleId": string],
+                    required: ["expectedRevision", "profileId", "ruleId"]),
+             readOnly: false),
+        tool("kdcustom_move_context_rule", "contextRules.move", "Move focus rule",
+             "Move a rule up or down one position to change first-match priority.",
+             object(["expectedRevision": string, "profileId": string, "ruleId": string,
+                     "direction": ["type": "string", "enum": ["up", "down"]]],
+                    required: ["expectedRevision", "profileId", "ruleId", "direction"]), readOnly: false),
         tool("kdcustom_apply_batch", "configuration.applyBatch", "Apply configuration batch",
-             "Atomically validate and commit 1–32 profile, group, or binding edits against one revision.",
+             "Atomically validate and commit 1–32 profile, group, binding, or focus-rule edits against one revision.",
              object(["expectedRevision": string,
                      "operations": ["type": "array", "minItems": 1, "maxItems": 32,
                                     "items": object(["name": ["type": "string", "enum": batchNames],
@@ -95,6 +113,9 @@ enum MCPTools {
              readOnly: false),
         tool("kdcustom_get_runtime", "runtime.get", "Get runtime",
              "Read active app, effective profile, device connection, and permissions as observed by the app.",
+             empty, readOnly: true),
+        tool("kdcustom_get_focused_input", "runtime.focus", "Get focused input",
+             "Read current focus metadata and kind without field value or selected text.",
              empty, readOnly: true),
         tool("kdcustom_get_device_settings", "device.getSettings", "Get observed device settings",
              "Read cached settings with availability and observation time; unavailable is distinct from zero.",
@@ -110,7 +131,8 @@ enum MCPTools {
     static let byName = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
     static let batchNames = [
         "kdcustom_create_profile", "kdcustom_update_profile", "kdcustom_delete_profile",
-        "kdcustom_rename_group", "kdcustom_select_group", "kdcustom_set_binding"
+        "kdcustom_rename_group", "kdcustom_select_group", "kdcustom_set_binding",
+        "kdcustom_set_context_rule", "kdcustom_delete_context_rule", "kdcustom_move_context_rule"
     ]
 
     static func validate(name: String, arguments: [String: Any], inBatch: Bool = false) throws {
@@ -126,14 +148,14 @@ enum MCPTools {
         if inBatch && !batchNames.contains(name) {
             throw MCPInputError(reason: "Tool is not valid in an atomic configuration batch")
         }
-        for (key, value) in arguments where key != "binding" && key != "operations" {
+        for (key, value) in arguments where key != "binding" && key != "rule" && key != "operations" {
             guard let string = value as? String, !string.isEmpty else {
                 throw MCPInputError(reason: "\(key) must be a nonempty string")
             }
             if key == "expectedRevision" && string.utf8.count > 128 {
                 throw MCPInputError(reason: "expectedRevision is too long")
             }
-            if ["profileId", "groupId"].contains(key) && string.utf8.count > 80 {
+            if ["profileId", "groupId", "ruleId"].contains(key) && string.utf8.count > 80 {
                 throw MCPInputError(reason: "\(key) is too long")
             }
             if key == "controlId" && ControlID(rawValue: string) == nil {
@@ -142,6 +164,7 @@ enum MCPTools {
             if key == "setting" && !["battery", "brightness", "sleep", "rotation"].contains(string) {
                 throw MCPInputError(reason: "Unknown device setting")
             }
+            if key == "direction" && !["up", "down"].contains(string) { throw MCPInputError(reason: "Unknown rule direction") }
         }
         if name == "kdcustom_update_profile" &&
             arguments["name"] == nil && arguments["appBundleIdentifier"] == nil {
@@ -162,6 +185,12 @@ enum MCPTools {
             }
             try validateBinding(binding)
         }
+        if name == "kdcustom_set_context_rule" {
+            guard let rule = arguments["rule"] as? [String: Any] else {
+                throw MCPInputError(reason: "rule must be an object")
+            }
+            try validateFocusRule(rule)
+        }
         if name == "kdcustom_apply_batch" {
             guard let operations = arguments["operations"] as? [[String: Any]],
                   (1...32).contains(operations.count) else {
@@ -179,13 +208,20 @@ enum MCPTools {
     }
 
     private static func validateBinding(_ object: [String: Any]) throws {
-        let keys: Set<String> = [
+        let required: Set<String> = [
             "controlID", "label", "pressActions", "releaseActions", "buttonBehavior",
             "dialBehavior", "repeatIntervalMilliseconds", "heldModifiers",
             "idleTimeoutMilliseconds", "macroRetriggerPolicy", "queueLimit", "macroRepeatCount"
         ]
-        guard Set(object.keys) == keys else {
-            throw MCPInputError(reason: "binding must contain every ControlBinding field exactly once")
+        guard required.isSubset(of: Set(object.keys)),
+              Set(object.keys).isSubset(of: required.union(["smart"])) else {
+            throw MCPInputError(reason: "binding must contain all required ControlBinding fields and only optional smart")
+        }
+        if let smart = object["smart"] {
+            guard let smart = smart as? [String: Any] else {
+                throw MCPInputError(reason: "smart must be an object")
+            }
+            try validateSmart(smart)
         }
         for actionKey in ["pressActions", "releaseActions"] {
             guard let actions = object[actionKey] as? [[String: Any]] else {
@@ -214,6 +250,77 @@ enum MCPTools {
         }
     }
 
+    private static func validateSmart(_ object: [String: Any]) throws {
+        let allowed: Set<String> = ["direction", "detection", "step", "shortcut", "modifierRules", "fallbackToActions"]
+        guard Set(object.keys).isSubset(of: allowed) else {
+            throw MCPInputError(reason: "smart contains an unexpected field")
+        }
+        if let shortcut = object["shortcut"] {
+            try validateSmartShortcut(shortcut)
+        }
+        if let rules = object["modifierRules"] {
+            guard let rules = rules as? [[String: Any]], rules.count <= 8 else {
+                throw MCPInputError(reason: "modifierRules must be an array of at most eight rules")
+            }
+            let required: Set<String> = ["id", "name", "modifiers", "step"]
+            for rule in rules {
+                guard required.isSubset(of: Set(rule.keys)),
+                      Set(rule.keys).isSubset(of: required.union(["shortcut"])) else {
+                    throw MCPInputError(reason: "smart modifier rule has missing or unexpected fields")
+                }
+                try validateSmartModifiers(rule["modifiers"])
+                if let shortcut = rule["shortcut"] { try validateSmartShortcut(shortcut) }
+            }
+        }
+    }
+
+    private static func validateSmartShortcut(_ raw: Any) throws {
+        guard let shortcut = raw as? [String: Any],
+              Set(["keyCode"]).isSubset(of: Set(shortcut.keys)),
+              Set(shortcut.keys).isSubset(of: ["keyCode", "modifiers", "repeatCount"]) else {
+            throw MCPInputError(reason: "smart shortcut has missing or unexpected fields")
+        }
+        if let modifiers = shortcut["modifiers"] { try validateSmartModifiers(modifiers) }
+    }
+
+    private static func validateSmartModifiers(_ raw: Any?) throws {
+        guard raw is NSNumber else {
+            throw MCPInputError(reason: "smart modifiers must be a numeric flag value")
+        }
+    }
+
+    private static func validateFocusRule(_ object: [String: Any]) throws {
+        let required: Set<String> = ["id", "name", "enabled", "targetGroupID"]
+        let allowed = required.union(["kind", "role", "identifier", "labelContains"])
+        guard required.isSubset(of: Set(object.keys)), Set(object.keys).isSubset(of: allowed),
+              JSONSerialization.isValidJSONObject(object) else {
+            throw MCPInputError(reason: "Focus rule has missing or unexpected fields")
+        }
+        do {
+            let rule = try JSONDecoder().decode(FocusRule.self,
+                                                from: JSONSerialization.data(withJSONObject: object))
+            guard (1...80).contains(rule.id.utf8.count),
+                  (1...80).contains(rule.name.utf8.count),
+                  (1...80).contains(rule.targetGroupID.utf8.count),
+                  !rule.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !rule.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  rule.hasCriterion,
+                  rule.kind != .secure, rule.kind != .unavailable else {
+                throw MCPInputError(reason: "Focus rule needs a valid ID, name, target group, and nonsecure criterion")
+            }
+            for (value, maximum) in [(rule.role, 128), (rule.identifier, 256), (rule.labelContains, 160)] {
+                if let value, value.utf8.count > maximum ||
+                    value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || value.contains("\0") {
+                    throw MCPInputError(reason: "Focus rule criterion is empty or too long")
+                }
+            }
+        } catch let error as MCPInputError {
+            throw error
+        } catch {
+            throw MCPInputError(reason: "Invalid FocusRule: \(error.localizedDescription)")
+        }
+    }
+
     private static let actionKeys: [String: Set<String>] = {
         let base: Set<String> = ["kind", "repeatCount"]
         return [
@@ -237,9 +344,28 @@ enum MCPTools {
     private static let controlIDSchema: [String: Any] = [
         "type": "string", "enum": ControlID.allCases.map(\.rawValue)
     ]
-    private static let modifierSchema = object(
-        ["rawValue": ["type": "integer", "minimum": 0]], required: ["rawValue"]
-    )
+    // KeyModifiers is an OptionSet and Codable emits its UInt64 raw value.
+    private static let modifierSchema: [String: Any] = ["type": "integer", "minimum": 0]
+    private static let smartShortcutSchema = object([
+        "keyCode": ["type": "integer", "minimum": 0, "maximum": 255],
+        "modifiers": modifierSchema,
+        "repeatCount": ["type": "integer", "minimum": 1, "maximum": 100]
+    ], required: ["keyCode"])
+    private static let smartModifierRuleSchema = object([
+        "id": ["type": "string", "minLength": 1, "maxLength": 80],
+        "name": ["type": "string", "minLength": 1, "maxLength": 60],
+        "modifiers": modifierSchema,
+        "step": ["type": "number", "minimum": 0.000001, "maximum": 1_000_000],
+        "shortcut": smartShortcutSchema
+    ], required: ["id", "name", "modifiers", "step"])
+    private static let smartSchema = object([
+        "direction": ["type": "string", "enum": ["increase", "decrease"]],
+        "detection": ["type": "string", "enum": ["automatic", "numericField"]],
+        "step": ["type": "number", "minimum": 0.000001, "maximum": 1_000_000],
+        "shortcut": smartShortcutSchema,
+        "modifierRules": ["type": "array", "maxItems": 8, "items": smartModifierRuleSchema],
+        "fallbackToActions": ["type": "boolean"]
+    ])
     private static let stepSchema: [String: Any] = [
         "oneOf": actionKeys.map { kind, keys in
             var properties: [String: Any] = [
@@ -273,18 +399,30 @@ enum MCPTools {
         "pressActions": ["type": "array", "maxItems": 64, "items": stepSchema],
         "releaseActions": ["type": "array", "maxItems": 64, "items": stepSchema],
         "buttonBehavior": ["type": "string", "enum": ["pressRelease", "hold", "toggle", "repeatWhileHeld"]],
-        "dialBehavior": ["type": "string", "enum": ["perStep", "heldModifiers"]],
+        "dialBehavior": ["type": "string", "enum": ["perStep", "heldModifiers", "smart"]],
         "repeatIntervalMilliseconds": ["type": "integer", "minimum": 20, "maximum": 5000],
         "heldModifiers": modifierSchema,
         "idleTimeoutMilliseconds": ["type": "integer", "minimum": 20, "maximum": 5000],
         "macroRetriggerPolicy": ["type": "string", "enum": ["queue", "restart", "ignoreWhileRunning"]],
         "queueLimit": ["type": "integer", "minimum": 1, "maximum": 32],
-        "macroRepeatCount": ["type": "integer", "minimum": 1, "maximum": 100]
+        "macroRepeatCount": ["type": "integer", "minimum": 1, "maximum": 100],
+        "smart": smartSchema
     ], required: [
         "controlID", "label", "pressActions", "releaseActions", "buttonBehavior",
         "dialBehavior", "repeatIntervalMilliseconds", "heldModifiers",
         "idleTimeoutMilliseconds", "macroRetriggerPolicy", "queueLimit", "macroRepeatCount"
     ])
+
+    private static let focusRuleSchema = object([
+        "id": ["type": "string", "minLength": 1, "maxLength": 80],
+        "name": ["type": "string", "minLength": 1, "maxLength": 80],
+        "enabled": ["type": "boolean"],
+        "targetGroupID": ["type": "string", "minLength": 1, "maxLength": 80],
+        "kind": ["type": "string", "enum": ["numeric", "text", "other"]],
+        "role": ["type": "string", "minLength": 1, "maxLength": 128],
+        "identifier": ["type": "string", "minLength": 1, "maxLength": 256],
+        "labelContains": ["type": "string", "minLength": 1, "maxLength": 160]
+    ], required: ["id", "name", "enabled", "targetGroupID"])
 
     private static func object(_ properties: [String: Any], required: [String] = []) -> [String: Any] {
         var result: [String: Any] = [

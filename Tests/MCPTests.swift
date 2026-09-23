@@ -57,15 +57,20 @@ enum MCPTests {
               "initialized notification has no response")
 
         let listed = result(send(server, request(6, "tools/list")))?["tools"] as? [[String: Any]]
-        check(listed?.count == 14, "all tools are listed")
+        check(listed?.count == 19, "all tools are listed")
         let read = listed?.first { $0["name"] as? String == "kdcustom_list_profiles" }
         let write = listed?.first { $0["name"] as? String == "kdcustom_set_binding" }
+        let focusedRead = listed?.first { $0["name"] as? String == "kdcustom_get_focused_input" }
         check((read?["annotations"] as? [String: Any])?["readOnlyHint"] as? Bool == true,
               "read operation has readOnly annotation")
         check((write?["annotations"] as? [String: Any])?["readOnlyHint"] as? Bool == false,
               "write operation has non-read-only annotation")
         check((write?["inputSchema"] as? [String: Any])?["type"] as? String == "object",
               "tool input schema is an object")
+        check((focusedRead?["annotations"] as? [String: Any])?["readOnlyHint"] as? Bool == true &&
+              send(server, call(60, "kdcustom_get_focused_input", [:])) != nil &&
+              calls.last?.0 == "runtime.focus",
+              "focused-input metadata tool is read-only and routed to the app")
 
         check(code(send(server, request(7, "unknown"))) == -32601,
               "unknown methods return method-not-found")
@@ -97,13 +102,36 @@ enum MCPTests {
         check(invalidResult?["isError"] as? Bool == true && calls.count == beforeInvalid,
               "malformed binding is rejected before reaching handler")
 
+        let focusRule: [String: Any] = [
+            "id": "numeric", "name": "Numeric fields", "enabled": true,
+            "targetGroupID": "group-2", "kind": "numeric", "role": "AXTextField"
+        ]
+        let focusResult = result(send(server, call(61, "kdcustom_set_context_rule", [
+            "expectedRevision": "r1", "profileId": "editor", "rule": focusRule
+        ])))
+        check(focusResult?["isError"] as? Bool == false && calls.last?.0 == "contextRules.set",
+              "complete focus rule reaches the shared configuration handler")
+        var malformedRule = focusRule
+        malformedRule["fieldValue"] = "123456"
+        let beforeMalformedRule = calls.count
+        check(result(send(server, call(62, "kdcustom_set_context_rule", [
+            "expectedRevision": "r1", "profileId": "editor", "rule": malformedRule
+        ])))?["isError"] as? Bool == true && calls.count == beforeMalformedRule,
+              "field values and unknown focus-rule fields are rejected before app dispatch")
+        check(result(send(server, call(63, "kdcustom_list_context_rules",
+                                       ["profileId": "editor"])))?["isError"] as? Bool == false &&
+              calls.last?.0 == "contextRules.list",
+              "ordered focus-rule read reaches the app")
+
         let batch: [String: Any] = [
             "expectedRevision": "r1",
             "operations": [
                 ["name": "kdcustom_rename_group",
                  "arguments": ["profileId": "global", "groupId": "group-1", "name": "Editing"]],
                 ["name": "kdcustom_set_binding",
-                 "arguments": ["profileId": "global", "groupId": "group-1", "binding": binding]]
+                 "arguments": ["profileId": "global", "groupId": "group-1", "binding": binding]],
+                ["name": "kdcustom_set_context_rule",
+                 "arguments": ["profileId": "editor", "rule": focusRule]]
             ]
         ]
         let batchResult = result(send(server, call(13, "kdcustom_apply_batch", batch)))

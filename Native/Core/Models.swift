@@ -35,10 +35,106 @@ enum ButtonBehavior: String, Codable, Sendable {
     case pressRelease, hold, toggle, repeatWhileHeld
 }
 enum DialBehavior: String, Codable, Sendable {
-    case perStep, heldModifiers
+    case perStep, heldModifiers, smart
 }
 enum MacroRetriggerPolicy: String, Codable, Sendable {
     case queue, restart, ignoreWhileRunning
+}
+
+enum SmartDialDirection: String, Codable, Sendable { case increase, decrease }
+enum SmartDialDetection: String, Codable, Sendable { case automatic, numericField }
+
+struct SmartShortcut: Codable, Equatable, Sendable {
+    var keyCode: UInt16
+    var modifiers: KeyModifiers
+    var repeatCount: Int
+
+    init(keyCode: UInt16, modifiers: KeyModifiers = [], repeatCount: Int = 1) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        self.repeatCount = repeatCount
+    }
+
+    private enum CodingKeys: String, CodingKey { case keyCode, modifiers, repeatCount }
+    init(from decoder: Decoder) throws {
+        let data = try decoder.container(keyedBy: CodingKeys.self)
+        keyCode = try data.decode(UInt16.self, forKey: .keyCode)
+        modifiers = try data.decodeIfPresent(KeyModifiers.self, forKey: .modifiers) ?? []
+        repeatCount = try data.decodeIfPresent(Int.self, forKey: .repeatCount) ?? 1
+    }
+}
+
+struct SmartModifierRule: Codable, Equatable, Sendable {
+    var id: String
+    var name: String
+    /// Exact physical modifier set required to select this rule.
+    var modifiers: KeyModifiers
+    var step: Double
+    /// Nil inherits the setting's base shortcut, if any.
+    var shortcut: SmartShortcut?
+
+    init(id: String = UUID().uuidString, name: String, modifiers: KeyModifiers,
+         step: Double, shortcut: SmartShortcut? = nil) {
+        self.id = id
+        self.name = name
+        self.modifiers = modifiers
+        self.step = step
+        self.shortcut = shortcut
+    }
+}
+
+struct SmartDialSelection: Equatable, Sendable {
+    var step: Double
+    var shortcut: SmartShortcut?
+}
+
+struct SmartDialSettings: Codable, Equatable, Sendable {
+    var direction: SmartDialDirection
+    var detection: SmartDialDetection
+    var step: Double
+    var shortcut: SmartShortcut?
+    var modifierRules: [SmartModifierRule]
+    var fallbackToActions: Bool
+
+    init(direction: SmartDialDirection = .increase,
+         detection: SmartDialDetection = .automatic,
+         step: Double = 1,
+         shortcut: SmartShortcut? = nil,
+         modifierRules: [SmartModifierRule] = [
+            .init(id: "option", name: "Fine", modifiers: .option, step: 0.01),
+            .init(id: "shift", name: "Coarse", modifiers: .shift, step: 10)
+         ],
+         fallbackToActions: Bool = false) {
+        self.direction = direction
+        self.detection = detection
+        self.step = step
+        self.shortcut = shortcut
+        self.modifierRules = modifierRules
+        self.fallbackToActions = fallbackToActions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case direction, detection, step, shortcut, modifierRules, fallbackToActions
+    }
+    init(from decoder: Decoder) throws {
+        let data = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = Self()
+        direction = try data.decodeIfPresent(SmartDialDirection.self, forKey: .direction) ?? defaults.direction
+        detection = try data.decodeIfPresent(SmartDialDetection.self, forKey: .detection) ?? defaults.detection
+        step = try data.decodeIfPresent(Double.self, forKey: .step) ?? defaults.step
+        shortcut = try data.decodeIfPresent(SmartShortcut.self, forKey: .shortcut)
+        modifierRules = try data.decodeIfPresent([SmartModifierRule].self, forKey: .modifierRules) ?? defaults.modifierRules
+        fallbackToActions = try data.decodeIfPresent(Bool.self, forKey: .fallbackToActions) ?? defaults.fallbackToActions
+    }
+
+    /// Unsupported combinations are deliberately inert; they never degrade to
+    /// the base action or a partially matching modifier rule.
+    func selection(for physicalModifiers: KeyModifiers) -> SmartDialSelection? {
+        guard physicalModifiers.subtracting(.supported).isEmpty else { return nil }
+        if physicalModifiers.isEmpty { return SmartDialSelection(step: step, shortcut: shortcut) }
+        guard let rule = modifierRules.first(where: { $0.modifiers == physicalModifiers }) else { return nil }
+        return SmartDialSelection(step: rule.step, shortcut: rule.shortcut ?? shortcut)
+    }
 }
 
 /// One action repeated a finite number of times. A sequence is a flat array of steps.
@@ -178,13 +274,14 @@ struct ControlBinding: Codable, Equatable, Sendable {
     var macroRetriggerPolicy: MacroRetriggerPolicy
     var queueLimit: Int
     var macroRepeatCount: Int
+    var smart: SmartDialSettings?
 
     init(controlID: ControlID, label: String = "", pressActions: [ActionStep] = [],
          releaseActions: [ActionStep] = [], buttonBehavior: ButtonBehavior = .pressRelease,
          dialBehavior: DialBehavior = .perStep, repeatIntervalMilliseconds: Int = 100,
          heldModifiers: KeyModifiers = [], idleTimeoutMilliseconds: Int = 250,
          macroRetriggerPolicy: MacroRetriggerPolicy = .queue, queueLimit: Int = 8,
-         macroRepeatCount: Int = 1) {
+         macroRepeatCount: Int = 1, smart: SmartDialSettings? = nil) {
         self.controlID = controlID
         self.label = label
         self.pressActions = pressActions
@@ -197,12 +294,13 @@ struct ControlBinding: Codable, Equatable, Sendable {
         self.macroRetriggerPolicy = macroRetriggerPolicy
         self.queueLimit = queueLimit
         self.macroRepeatCount = macroRepeatCount
+        self.smart = smart
     }
 
     private enum CodingKeys: String, CodingKey {
         case controlID, label, pressActions, releaseActions, buttonBehavior, dialBehavior
         case repeatIntervalMilliseconds, heldModifiers, idleTimeoutMilliseconds
-        case macroRetriggerPolicy, queueLimit, macroRepeatCount
+        case macroRetriggerPolicy, queueLimit, macroRepeatCount, smart
     }
 
     init(from decoder: Decoder) throws {
@@ -220,6 +318,7 @@ struct ControlBinding: Codable, Equatable, Sendable {
         macroRetriggerPolicy = try data.decodeIfPresent(MacroRetriggerPolicy.self, forKey: .macroRetriggerPolicy) ?? .queue
         queueLimit = try data.decodeIfPresent(Int.self, forKey: .queueLimit) ?? 8
         macroRepeatCount = try data.decodeIfPresent(Int.self, forKey: .macroRepeatCount) ?? 1
+        smart = try data.decodeIfPresent(SmartDialSettings.self, forKey: .smart)
     }
 }
 
@@ -248,6 +347,77 @@ struct KeydialGroup: Codable, Equatable, Sendable {
     }
 }
 
+enum FocusKind: String, Codable, CaseIterable, Sendable {
+    case unavailable, secure, numeric, text, other
+}
+
+/// Only focus metadata used for rule selection. Field values and selected text
+/// never enter the profile document or the runtime snapshot.
+struct FocusSnapshot: Codable, Equatable, Sendable {
+    var token: String
+    var bundleIdentifier: String?
+    var role: String?
+    var subrole: String?
+    var identifier: String?
+    var label: String?
+    var kind: FocusKind
+
+    init(token: String = UUID().uuidString, bundleIdentifier: String? = nil,
+         role: String? = nil, subrole: String? = nil, identifier: String? = nil,
+         label: String? = nil, kind: FocusKind = .unavailable) {
+        self.token = token
+        self.bundleIdentifier = bundleIdentifier
+        self.role = role
+        self.subrole = subrole
+        self.identifier = identifier
+        self.label = label
+        self.kind = kind
+    }
+}
+
+struct FocusRule: Codable, Equatable, Sendable {
+    var id: String
+    var name: String
+    var enabled: Bool
+    var targetGroupID: String
+    var kind: FocusKind?
+    var role: String?
+    var identifier: String?
+    var labelContains: String?
+
+    init(id: String = UUID().uuidString, name: String, enabled: Bool = true,
+         targetGroupID: String, kind: FocusKind? = nil, role: String? = nil,
+         identifier: String? = nil, labelContains: String? = nil) {
+        self.id = id
+        self.name = name
+        self.enabled = enabled
+        self.targetGroupID = targetGroupID
+        self.kind = kind
+        self.role = role
+        self.identifier = identifier
+        self.labelContains = labelContains
+    }
+
+    var hasCriterion: Bool {
+        kind != nil || role != nil || identifier != nil || labelContains != nil
+    }
+
+    func matches(_ snapshot: FocusSnapshot) -> Bool {
+        guard enabled, snapshot.kind != .unavailable, snapshot.kind != .secure,
+              hasCriterion else { return false }
+        if let kind, kind != snapshot.kind { return false }
+        if let role, role != snapshot.role { return false }
+        if let identifier, identifier != snapshot.identifier { return false }
+        if let labelContains {
+            guard let label = snapshot.label,
+                  label.range(of: labelContains, options: [.caseInsensitive, .diacriticInsensitive]) != nil else {
+                return false
+            }
+        }
+        return true
+    }
+}
+
 struct KeydialProfile: Codable, Equatable, Sendable {
     var id: String
     var name: String
@@ -255,17 +425,49 @@ struct KeydialProfile: Codable, Equatable, Sendable {
     var appBundleIdentifier: String?
     var selectedGroupID: String
     var groups: [KeydialGroup]
+    var contextRules: [FocusRule]
 
     init(id: String = UUID().uuidString, name: String, appBundleIdentifier: String? = nil,
-         selectedGroupID: String = "group-1", groups: [KeydialGroup] = (1...6).map { KeydialGroup(id: "group-\($0)", name: "Group \($0)") }) {
+         selectedGroupID: String = "group-1", groups: [KeydialGroup] = (1...6).map { KeydialGroup(id: "group-\($0)", name: "Group \($0)") },
+         contextRules: [FocusRule] = []) {
         self.id = id
         self.name = name
         self.appBundleIdentifier = appBundleIdentifier
         self.selectedGroupID = selectedGroupID
         self.groups = groups
+        self.contextRules = contextRules
     }
 
     var selectedGroup: KeydialGroup? { groups.first { $0.id == selectedGroupID } }
+
+    /// Rule order is priority. Only an exact app profile can override its four
+    /// dial bindings; the selected group's button bindings remain authoritative.
+    func matchingRule(for snapshot: FocusSnapshot) -> FocusRule? {
+        guard let appBundleIdentifier, snapshot.bundleIdentifier == appBundleIdentifier,
+              snapshot.kind != .secure, snapshot.kind != .unavailable else { return nil }
+        return contextRules.first { $0.matches(snapshot) }
+    }
+
+    func binding(for control: ControlID, focus: FocusSnapshot) -> ControlBinding? {
+        let normal = selectedGroup?.binding(for: control)
+        guard control.isDial, let rule = matchingRule(for: focus),
+              let group = groups.first(where: { $0.id == rule.targetGroupID }) else { return normal }
+        return group.binding(for: control) ?? normal
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, appBundleIdentifier, selectedGroupID, groups, contextRules
+    }
+
+    init(from decoder: Decoder) throws {
+        let data = try decoder.container(keyedBy: CodingKeys.self)
+        id = try data.decode(String.self, forKey: .id)
+        name = try data.decode(String.self, forKey: .name)
+        appBundleIdentifier = try data.decodeIfPresent(String.self, forKey: .appBundleIdentifier)
+        selectedGroupID = try data.decode(String.self, forKey: .selectedGroupID)
+        groups = try data.decode([KeydialGroup].self, forKey: .groups)
+        contextRules = try data.decodeIfPresent([FocusRule].self, forKey: .contextRules) ?? []
+    }
 }
 
 struct KeydialDocument: Codable, Equatable, Sendable {

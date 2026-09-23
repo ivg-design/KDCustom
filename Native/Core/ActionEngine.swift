@@ -210,6 +210,18 @@ final class ActionEngine {
         }
     }
 
+    /// A Smart detent replaces pending work and idle holds of this same dial.
+    /// Other controls retain their independently owned holds.
+    func prepareSmartDial(_ control: ControlID) {
+        guard let dial = dialNumber(for: control) else { return }
+        for candidate in ControlID.allCases where dialNumber(for: candidate) == dial {
+            cancel(control: candidate)
+        }
+        if let hold = dialHolds.removeValue(forKey: dial) {
+            releaseModifiers(hold.modifiers, owner: hold.owner)
+        }
+    }
+
     func cancelAll(reason: String) {
         guard !isCancellingAll else { return }
         isCancellingAll = true

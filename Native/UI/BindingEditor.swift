@@ -49,6 +49,7 @@ struct BindingEditor: View {
     @State private var recording: StepLocation?
     @State private var recordingModifiers: KeyModifiers = []
     @State private var chordCaptureCount = 0
+    @State private var expanded: StepLocation?
 
     private enum Lane: String { case press, release }
     private struct StepLocation: Equatable {
@@ -94,7 +95,14 @@ struct BindingEditor: View {
                                         onFlags: { recordingModifiers = $0 },
                                         onCancel: { recording = nil })
             .frame(width: 1, height: 1))
-        .onChange(of: binding.controlID) { _, _ in recording = nil }
+        .onAppear { selectInitialStep() }
+        .onChange(of: binding.controlID) { _, _ in
+            recording = nil
+            expanded = nil
+            selectInitialStep()
+        }
+        .onChange(of: binding.pressActions.count) { _, _ in normalizeExpandedStep() }
+        .onChange(of: binding.releaseActions.count) { _, _ in normalizeExpandedStep() }
         .onDisappear { recording = nil }
     }
 
@@ -106,7 +114,7 @@ struct BindingEditor: View {
                 .foregroundStyle(StudioTheme.accent)
             Text(binding.controlID.editorTitle)
                 .font(StudioTheme.font(22, weight: .medium))
-            Text("Changes are saved to this profile's selected group.")
+            Text("Changes are saved to this group's assignments.")
                 .font(StudioTheme.font(11))
                 .foregroundStyle(StudioTheme.secondaryText)
         }
@@ -116,11 +124,17 @@ struct BindingEditor: View {
     private var identitySection: some View {
         editorSection("Display") {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Control label").font(StudioTheme.font(11, weight: .medium))
-                TextField("Optional OLED label", text: $binding.label)
+                Text(binding.controlID.isDial ? "App label" : "Button OLED label")
+                    .font(StudioTheme.font(11, weight: .medium))
+                TextField(binding.controlID.isDial ? "Shown in KDCustom" : "Shown on the device",
+                          text: $binding.label)
                     .textFieldStyle(.roundedBorder)
                 let bytes = binding.label.utf16.count * 2
-                Text(bytes > 56 ? "This label is too long for the screen." : "Short labels are easier to read on the device.")
+                Text(bytes > 56
+                     ? (binding.controlID.isDial ? "App label exceeds the 56-byte limit."
+                                                  : "This label is too long for the button screen.")
+                     : (binding.controlID.isDial ? "Dials have no OLED label slot. Shown in KDCustom only."
+                                                 : "Short labels are easier to read on the button screen."))
                     .font(StudioTheme.font(10))
                     .foregroundStyle(bytes > 56 ? Color.red : StudioTheme.mutedText)
             }
@@ -130,9 +144,17 @@ struct BindingEditor: View {
     private var behaviorSection: some View {
         editorSection("Input behavior") {
             if binding.controlID.isDial {
-                Picker("Dial mode", selection: $binding.dialBehavior) {
+                Picker("Dial mode", selection: Binding(get: { binding.dialBehavior }, set: { mode in
+                    var next = binding
+                    next.dialBehavior = mode
+                    if mode == .smart && next.smart == nil {
+                        next.smart = SmartDialSettings(direction: [.dial1CCW, .dial2CCW].contains(next.controlID) ? .decrease : .increase)
+                    }
+                    binding = next
+                })) {
                     Text("One action per detent").tag(DialBehavior.perStep)
                     Text("Hold modifiers between detents").tag(DialBehavior.heldModifiers)
+                    Text("Smart · focused input & keyboard modifiers").tag(DialBehavior.smart)
                 }
                 .pickerStyle(.menu)
                 if binding.dialBehavior == .heldModifiers {
@@ -142,6 +164,9 @@ struct BindingEditor: View {
                     Text("Clockwise and counterclockwise share the dial's idle hold.")
                         .font(StudioTheme.font(10))
                         .foregroundStyle(StudioTheme.mutedText)
+                }
+                if binding.dialBehavior == .smart {
+                    SmartDialEditor(settings: Binding(get: { binding.smart ?? SmartDialSettings() }, set: { binding.smart = $0 }))
                 }
             } else {
                 Picker("Button mode", selection: $binding.buttonBehavior) {
@@ -161,7 +186,7 @@ struct BindingEditor: View {
 
     private func actionSection(_ lane: Lane) -> some View {
         let actions = lane == .press ? binding.pressActions : binding.releaseActions
-        let title = lane == .press ? (binding.controlID.isDial ? "On dial step" : "On press") : "On release"
+        let title = lane == .press ? (binding.dialBehavior == .smart ? "Fallback actions" : (binding.controlID.isDial ? "On dial step" : "On press")) : "On release"
         return editorSection(title) {
             if lane == .release && binding.controlID.isDial {
                 Text("Dial detents have no release edge. Stored release steps do not run.")
@@ -176,22 +201,35 @@ struct BindingEditor: View {
                     .padding(10)
                     .background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 7))
             }
-            ForEach(actions.indices, id: \.self) { index in
-                let location = StepLocation(lane: lane, index: index)
-                ActionStepEditor(step: stepBinding(at: location),
-                                 number: index + 1,
-                                 isRecording: recording == location,
-                                 recordingModifiers: recordingModifiers,
-                                 onRecord: { toggleRecording(location) },
-                                 onMoveUp: { moveStep(at: location, by: -1) },
-                                 onMoveDown: { moveStep(at: location, by: 1) },
-                                 onDelete: { deleteStep(at: location) },
-                                 canMoveUp: index > 0,
-                                 canMoveDown: index < actions.count - 1)
+            VStack(spacing: 0) {
+                ForEach(actions.indices, id: \.self) { index in
+                    let location = StepLocation(lane: lane, index: index)
+                    ActionStepEditor(step: stepBinding(at: location),
+                                     number: index + 1,
+                                     isExpanded: expanded == location,
+                                     isRecording: recording == location,
+                                     hasCapturedKeys: chordCaptureCount > 0,
+                                     recordingModifiers: recordingModifiers,
+                                     onSelect: { selectStep(location) },
+                                     onRecord: { toggleRecording(location) },
+                                     onMoveUp: { moveStep(at: location, by: -1) },
+                                     onMoveDown: { moveStep(at: location, by: 1) },
+                                     onDelete: { deleteStep(at: location) },
+                                     canMoveUp: index > 0,
+                                     canMoveDown: index < actions.count - 1)
+                    if index < actions.count - 1 {
+                        HStack(spacing: 0) {
+                            Rectangle().fill(StudioTheme.accent.opacity(0.45))
+                                .frame(width: 2, height: 7).frame(width: 27)
+                            Spacer()
+                        }
+                    }
+                }
             }
             Button {
                 recording = nil
                 editActions(lane) { $0.append(.keyTap(0)) }
+                expanded = StepLocation(lane: lane, index: actions.count)
             } label: {
                 Label("Add action", systemImage: "plus.circle.fill")
                     .font(StudioTheme.font(11, weight: .medium))
@@ -319,29 +357,43 @@ struct BindingEditor: View {
 
     private func moveStep(at location: StepLocation, by delta: Int) {
         recording = nil
+        let destination = location.index + delta
+        guard (location.lane == .press ? binding.pressActions : binding.releaseActions).indices.contains(destination) else { return }
         editActions(location.lane) { actions in
-            let destination = location.index + delta
             guard actions.indices.contains(location.index), actions.indices.contains(destination) else { return }
             actions.swapAt(location.index, destination)
         }
+        if expanded == location { expanded = StepLocation(lane: location.lane, index: destination) }
+        else if expanded == StepLocation(lane: location.lane, index: destination) { expanded = location }
     }
 
     private func deleteStep(at location: StepLocation) {
         recording = nil
+        let count = location.lane == .press ? binding.pressActions.count : binding.releaseActions.count
+        guard location.index < count else { return }
         editActions(location.lane) { actions in
             guard actions.indices.contains(location.index) else { return }
             actions.remove(at: location.index)
         }
+        if let selected = expanded, selected.lane == location.lane {
+            if selected.index == location.index {
+                if count > 1 { expanded = StepLocation(lane: location.lane, index: min(location.index, count - 2)) }
+                else { expanded = firstStep(in: location.lane == .press ? .release : .press) }
+            } else if selected.index > location.index {
+                expanded = StepLocation(lane: location.lane, index: selected.index - 1)
+            }
+        }
     }
 
     private func toggleRecording(_ location: StepLocation) {
+        guard expanded == location else { return }
         recording = recording == location ? nil : location
         recordingModifiers = []
         chordCaptureCount = 0
     }
 
     private func capturedKey(_ code: UInt16, _ modifiers: KeyModifiers) {
-        guard let location = recording else { return }
+        guard let location = recording, expanded == location else { recording = nil; return }
         var shouldStop = true
         var capturedChord = false
         editActions(location.lane) { actions in
@@ -361,6 +413,31 @@ struct BindingEditor: View {
         }
         if capturedChord { chordCaptureCount += 1 }
         if shouldStop { recording = nil }
+    }
+
+    private func selectInitialStep() {
+        guard expanded == nil else { return }
+        expanded = firstStep(in: .press) ?? firstStep(in: .release)
+    }
+
+    private func firstStep(in lane: Lane) -> StepLocation? {
+        if lane == .release && binding.controlID.isDial { return nil }
+        let actions = lane == .press ? binding.pressActions : binding.releaseActions
+        return actions.isEmpty ? nil : StepLocation(lane: lane, index: 0)
+    }
+
+    private func normalizeExpandedStep() {
+        if let selected = expanded {
+            let count = selected.lane == .press ? binding.pressActions.count : binding.releaseActions.count
+            if selected.index < count && (selected.lane != .release || !binding.controlID.isDial) { return }
+        }
+        recording = nil
+        expanded = nil
+        selectInitialStep()
+    }
+
+    private func selectStep(_ location: StepLocation) {
+        if expanded != location { recording = nil; expanded = location }
     }
 }
 
@@ -467,51 +544,109 @@ private enum EditorOperationKind: String, CaseIterable, Identifiable {
 private struct ActionStepEditor: View {
     @Binding var step: ActionStep
     let number: Int
+    let isExpanded: Bool
     let isRecording: Bool
+    let hasCapturedKeys: Bool
     let recordingModifiers: KeyModifiers
+    let onSelect: () -> Void
     let onRecord: () -> Void
     let onMoveUp: () -> Void
     let onMoveDown: () -> Void
     let onDelete: () -> Void
     let canMoveUp: Bool
     let canMoveDown: Bool
+    @State private var showingAdvancedKeyCodes = false
 
     private let mouseButtons: [MouseButton] = [.left, .right, .middle]
     private let mediaKeys: [MediaKey] = [.playPause, .nextTrack, .previousTrack,
                                          .volumeUp, .volumeDown, .mute]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 7) {
-                Text(String(format: "%02d", number))
-                    .font(StudioTheme.font(10, weight: .bold))
-                    .foregroundStyle(StudioTheme.accent)
-                    .frame(width: 20, alignment: .leading)
-                Picker("Action", selection: kindBinding) {
-                    ForEach(EditorOperationKind.allCases) { kind in
-                        Text(kind.title).tag(kind)
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: onSelect) {
+                HStack(spacing: 8) {
+                    Text(String(format: "%02d", number))
+                        .font(StudioTheme.font(10, weight: .bold))
+                        .foregroundStyle(StudioTheme.accent)
+                        .frame(width: 20, alignment: .leading)
+                    Text(stepSummary)
+                        .font(StudioTheme.font(11, weight: .medium))
+                        .foregroundStyle(StudioTheme.text)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 2)
+                    if step.repeatCount > 1 {
+                        Text("×\(step.repeatCount)")
+                            .font(StudioTheme.font(10, weight: .medium))
+                            .foregroundStyle(StudioTheme.accent)
+                            .monospacedDigit()
+                    }
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(StudioTheme.mutedText)
+                }
+                .frame(maxWidth: .infinity, minHeight: 26)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Step \(number), \(stepSummary)\(step.repeatCount > 1 ? ", repeat \(step.repeatCount) times" : "")")
+            .accessibilityHint("Open action details")
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 9) {
+                    Rectangle().fill(StudioTheme.divider).frame(height: 1)
+                    HStack(spacing: 7) {
+                        Picker("Action type", selection: kindBinding) {
+                            ForEach(EditorOperationKind.allCases) { kind in
+                                Text(kind.title).tag(kind)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        Spacer(minLength: 0)
+                        iconButton("arrow.up", help: "Move action up", enabled: canMoveUp, action: onMoveUp)
+                        iconButton("arrow.down", help: "Move action down", enabled: canMoveDown, action: onMoveDown)
+                        iconButton("trash", help: "Delete action", enabled: true, action: onDelete)
+                    }
+                    operationEditor
+                    Stepper(value: $step.repeatCount, in: 1...100) {
+                        valueLine("Repeat step", value: "\(step.repeatCount)×")
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                Spacer(minLength: 0)
-                iconButton("arrow.up", help: "Move action up", enabled: canMoveUp, action: onMoveUp)
-                iconButton("arrow.down", help: "Move action down", enabled: canMoveDown, action: onMoveDown)
-                iconButton("trash", help: "Delete action", enabled: true, action: onDelete)
-            }
-            operationEditor
-            Stepper(value: $step.repeatCount, in: 1...100) {
-                HStack {
-                    Text("Repeat step").foregroundStyle(StudioTheme.secondaryText)
-                    Spacer()
-                    Text("\(step.repeatCount)×").monospacedDigit()
-                }
-                .font(StudioTheme.font(11))
+                .padding(.top, 8)
             }
         }
-        .padding(10)
-        .background(StudioTheme.panelRaised, in: RoundedRectangle(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(StudioTheme.divider.opacity(0.8)))
+        .padding(.horizontal, 10)
+        .padding(.vertical, isExpanded ? 9 : 5)
+        .background(isExpanded ? StudioTheme.accentSoft.opacity(0.35) : StudioTheme.panelRaised,
+                    in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7)
+            .strokeBorder(isExpanded ? StudioTheme.accent.opacity(0.55) : StudioTheme.divider.opacity(0.8)))
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded { showingAdvancedKeyCodes = false }
+        }
+    }
+
+    private var stepSummary: String {
+        switch step.operation {
+        case let .keyTap(code, modifiers):
+            return "Key tap · \(KeyCodeName.modifiers(modifiers))\(KeyCodeName.title(code))"
+        case let .keyDown(code, modifiers):
+            return "Key down · \(KeyCodeName.modifiers(modifiers))\(KeyCodeName.title(code))"
+        case let .keyUp(code, modifiers):
+            return "Key up · \(KeyCodeName.modifiers(modifiers))\(KeyCodeName.title(code))"
+        case let .chord(codes, modifiers):
+            return "Chord · \(KeyCodeName.modifiers(modifiers))\(codes.map(KeyCodeName.title).joined(separator: "+"))"
+        case let .text(value):
+            let preview = value.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            return preview.isEmpty ? "Type text · empty" : "Type text · \(String(preview.prefix(32)))"
+        case let .delay(milliseconds): return "Delay · \(milliseconds) ms"
+        case let .mouseClick(button): return "Mouse click · \(button.rawValue.capitalized)"
+        case let .mouseButtonDown(button): return "Mouse down · \(button.rawValue.capitalized)"
+        case let .mouseButtonUp(button): return "Mouse up · \(button.rawValue.capitalized)"
+        case let .scroll(horizontal, vertical): return "Scroll · H \(horizontal), V \(vertical)"
+        case let .media(key): return "Media · \(key.editorTitle)"
+        case let .groupChange(offset): return offset < 0 ? "Group · Previous \(-offset)" : "Group · Next \(offset)"
+        }
     }
 
     @ViewBuilder
@@ -519,35 +654,47 @@ private struct ActionStepEditor: View {
         switch step.operation {
         case .keyDown, .keyUp, .keyTap:
             keyCaptureRow
-            Stepper(value: keyCodeBinding, in: 0...255) {
-                valueLine("Virtual key code", value: "\(keyCodeBinding.wrappedValue)")
-            }
             modifierButtons(modifiers: keyModifiersBinding)
+            DisclosureGroup("Advanced · virtual key code", isExpanded: $showingAdvancedKeyCodes) {
+                Stepper(value: keyCodeBinding, in: 0...255) {
+                    valueLine("Virtual key code", value: "\(keyCodeBinding.wrappedValue)")
+                }
+                .padding(.top, 5)
+            }
+            .font(StudioTheme.font(10))
+            .foregroundStyle(StudioTheme.secondaryText)
         case let .chord(codes, _):
             keyCaptureRow
             Text("Press each key while recording, then select Done.")
                 .font(StudioTheme.font(10))
                 .foregroundStyle(StudioTheme.mutedText)
-            ForEach(codes.indices, id: \.self) { index in
-                HStack(spacing: 6) {
-                    Stepper(value: chordCodeBinding(index), in: 0...255) {
-                        valueLine("Key \(index + 1)", value: KeyCodeName.title(codes[index]))
-                    }
-                    Button { removeChordCode(at: index) } label: {
-                        Image(systemName: "minus.circle")
-                    }
-                    .disabled(codes.count == 1)
-                    .help("Remove key")
-                    .buttonStyle(.plain)
-                }
-            }
-            if codes.count < 8 {
-                Button("Add key") { addChordCode() }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(StudioTheme.accent)
-                    .font(StudioTheme.font(11))
-            }
             modifierButtons(modifiers: keyModifiersBinding)
+            DisclosureGroup("Advanced · chord key codes", isExpanded: $showingAdvancedKeyCodes) {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(codes.indices, id: \.self) { index in
+                        HStack(spacing: 6) {
+                            Stepper(value: chordCodeBinding(index), in: 0...255) {
+                                valueLine("Key \(index + 1)", value: KeyCodeName.title(codes[index]))
+                            }
+                            Button { removeChordCode(at: index) } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .disabled(codes.count == 1)
+                            .help("Remove key")
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    if codes.count < 8 {
+                        Button("Add key") { addChordCode() }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(StudioTheme.accent)
+                            .font(StudioTheme.font(11))
+                    }
+                }
+                .padding(.top, 5)
+            }
+            .font(StudioTheme.font(10))
+            .foregroundStyle(StudioTheme.secondaryText)
         case let .text(value):
             TextEditor(text: textBinding)
                 .font(StudioTheme.font(11))
@@ -601,7 +748,7 @@ private struct ActionStepEditor: View {
     private var keyCaptureRow: some View {
         HStack(spacing: 7) {
             Text(keySummary)
-                .font(StudioTheme.font(11, weight: .medium))
+                .font(StudioTheme.font(15, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(isRecording ? StudioTheme.accent : StudioTheme.text)
@@ -612,11 +759,18 @@ private struct ActionStepEditor: View {
                 .help(isRecording ? "Finish recording" : "Capture keys in this window")
         }
         .padding(7)
+        .frame(minHeight: 38)
         .background(StudioTheme.panel, in: RoundedRectangle(cornerRadius: 5))
+        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(isRecording ? StudioTheme.accent : StudioTheme.divider))
+        .accessibilityElement(children: .contain)
+        .accessibilityValue(keySummary)
     }
 
     private var keySummary: String {
         if isRecording {
+            if hasCapturedKeys, case let .chord(codes, modifiers) = step.operation {
+                return KeyCodeName.modifiers(modifiers) + codes.map(KeyCodeName.title).joined(separator: " + ")
+            }
             let flags = KeyCodeName.modifiers(recordingModifiers)
             return flags.isEmpty ? "Press a shortcut…" : "\(flags)  Press a key…"
         }
@@ -640,7 +794,7 @@ private struct ActionStepEditor: View {
 
     private func iconButton(_ systemName: String, help: String, enabled: Bool,
                             action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: systemName).frame(width: 17, height: 17) }
+        Button(action: action) { Image(systemName: systemName).frame(width: 26, height: 26) }
             .buttonStyle(.plain)
             .foregroundStyle(StudioTheme.secondaryText)
             .disabled(!enabled)
@@ -677,7 +831,11 @@ private struct ActionStepEditor: View {
 
     private var kindBinding: Binding<EditorOperationKind> {
         Binding(get: { EditorOperationKind(step.operation) },
-                set: { step.operation = $0.defaultOperation })
+                set: { kind in
+                    if isRecording { onRecord() }
+                    showingAdvancedKeyCodes = false
+                    step.operation = kind.defaultOperation
+                })
     }
 
     private var keyCodeBinding: Binding<Int> {
@@ -802,7 +960,7 @@ private extension MediaKey {
     }
 }
 
-private enum KeyCodeName {
+enum KeyCodeName {
     static func modifiers(_ flags: KeyModifiers) -> String {
         ModifierChoice.allCases.filter { flags.contains($0.flag) }.map(\.symbol).joined()
     }
@@ -825,7 +983,7 @@ private enum KeyCodeName {
 }
 
 /// A first-responder capture surface. No event monitor or action injector is installed.
-private struct ShortcutCaptureView: NSViewRepresentable {
+struct ShortcutCaptureView: NSViewRepresentable {
     let isRecording: Bool
     let onKey: (UInt16, KeyModifiers) -> Void
     let onFlags: (KeyModifiers) -> Void
@@ -849,7 +1007,7 @@ private struct ShortcutCaptureView: NSViewRepresentable {
     }
 }
 
-private final class ShortcutCaptureNSView: NSView {
+final class ShortcutCaptureNSView: NSView {
     var isRecording = false
     var onKey: ((UInt16, KeyModifiers) -> Void)?
     var onFlags: ((KeyModifiers) -> Void)?

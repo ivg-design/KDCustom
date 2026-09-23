@@ -10,7 +10,8 @@ import Carbon
 final class StudioModel: ObservableObject {
     @Published private(set) var document: KeydialDocument
     @Published private(set) var revision: String
-    @Published var selectedProfileID: String
+    @Published var selectedProfileID: String { didSet { editingContextGroupID = nil } }
+    @Published var editingContextGroupID: String?
     @Published var selectedControl: ControlID = .dial1CW
     @Published private(set) var activeControls = Set<ControlID>()
     @Published private(set) var activeAppName = "No active app"
@@ -28,6 +29,11 @@ final class StudioModel: ObservableObject {
     @Published private(set) var deviceSettings: [String: String] = [:]
     @Published private(set) var recentEvents: [String] = []
     @Published var errorMessage: String?
+    @Published var showingSettings = false
+    @Published var showingContextRules = false
+    @Published private(set) var focusedInput = FocusSnapshot()
+    @Published private(set) var lastExternalFocus: FocusSnapshot?
+    @Published private(set) var lastExternalFocusAt: Date?
     @Published var appearance = UserDefaults.standard.string(forKey: "appearance") ?? "dark" {
         didSet { UserDefaults.standard.set(appearance, forKey: "appearance"); applyAppearance() }
     }
@@ -38,6 +44,9 @@ final class StudioModel: ObservableObject {
     let configuration: ConfigurationService
     let device = DeviceController()
     private let output = SystemActionOutput()
+    private let focusObserver = FocusedInputObserver()
+    private var focusConfirmedAt: TimeInterval = 0
+    private var appIcons: [String: NSImage] = [:]
     private lazy var engine = ActionEngine(output: output)
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
@@ -60,7 +69,7 @@ final class StudioModel: ObservableObject {
         configuration.onChange = { [weak self] document, revision in
             guard let self else { return }
             self.queuedGroupChange = nil
-            self.engine.cancelAll(reason: "Configuration changed")
+            self.cancelActions(reason: "Configuration changed")
             self.document = document; self.revision = revision
             if !document.profiles.contains(where: { $0.id == self.selectedProfileID }) {
                 self.selectedProfileID = document.globalProfileID
@@ -72,12 +81,12 @@ final class StudioModel: ObservableObject {
         }
         engine.onGroupChange = { [weak self] offset in self?.queueGroupChange(offset) }
         engine.onEvent = { [weak self] in self?.record($0) }
-        output.onObservationLost = { [weak self] in self?.engine.cancelAll(reason: "Input observer interrupted") }
+        output.onObservationLost = { [weak self] in self?.cancelActions(reason: "Input observer interrupted") }
         device.onControl = { [weak self] control, down in self?.input(control, down: down) }
         device.onStatus = { [weak self] in self?.record($0) }
         device.onConnectionChange = { [weak self] state, transport in
             guard let self else { return }
-            self.engine.cancelAll(reason: "Device connection changed")
+            self.cancelActions(reason: "Device connection changed")
             self.activeControls.removeAll()
             self.ready = self.device.ready
             self.connection = self.ready ? "Connected" : String(describing: state).capitalized
@@ -93,18 +102,32 @@ final class StudioModel: ObservableObject {
             self.refreshOutputGate(reason: "Device connection changed")
         }
         device.onSetting = { [weak self] response in self?.observed(response) }
+        focusObserver.onChange = { [weak self] in self?.focusChanged($0) }
     }
 
     var editorProfile: KeydialProfile { document.profiles.first { $0.id == selectedProfileID } ?? document.profiles[0] }
-    var editorGroup: KeydialGroup { editorProfile.selectedGroup ?? editorProfile.groups[0] }
+    var editorGroup: KeydialGroup {
+        if let id = editingContextGroupID, let group = editorProfile.groups.first(where: { $0.id == id }) { return group }
+        return editorProfile.selectedGroup ?? editorProfile.groups[0]
+    }
     var effectiveProfile: KeydialProfile { document.effectiveProfile(bundleIdentifier: activeBundleID, lockedProfileID: lockedProfileID)! }
     var effectiveGroup: KeydialGroup { effectiveProfile.selectedGroup ?? effectiveProfile.groups[0] }
     var currentBinding: ControlBinding { editorGroup.binding(for: selectedControl)! }
+    var activeContextRule: FocusRule? { effectiveProfile.matchingRule(for: focusedInput) }
+    var focusStatus: String {
+        if let rule = activeContextRule { return "Dials · \(rule.name)" }
+        switch focusedInput.kind {
+        case .unavailable: return "Dials · app defaults"
+        case .secure: return "Protected input · app defaults"
+        default: return "\(focusedInput.kind.rawValue.capitalized) control · app defaults"
+        }
+    }
     var outputStatus: String {
         if paused { return "Paused" }
         if huionRunning { return "Quit Huion to connect" }
         if !sessionAvailable { return "Session locked" }
         if secureInput { return "Secure input active" }
+        if focusedInput.kind == .secure { return "Protected input active" }
         if !accessibilityAllowed || !inputAllowed { return "Permissions needed" }
         if !ready { return "Waiting for device" }
         if lastForegroundPID == nil || activeBundleID == nil { return "Waiting for active app" }
@@ -141,9 +164,10 @@ final class StudioModel: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.reconcileForeground()
+                self.expireFocusIfNeeded()
                 let secure = IsSecureEventInputEnabled()
                 if secure != self.secureInput {
-                    self.engine.cancelAll(reason: "Secure input changed")
+                    self.cancelActions(reason: "Secure input changed")
                     self.secureInput = secure
                     self.refreshOutputGate(reason: "Secure input changed")
                 }
@@ -164,7 +188,8 @@ final class StudioModel: ObservableObject {
         reconcileDevice()
     }
     func stop() {
-        engine.cancelAll(reason: "App closing")
+        cancelActions(reason: "App closing")
+        focusObserver.stop()
         output.enabled = false
         output.stopObserving()
         timer?.invalidate(); timer = nil
@@ -176,7 +201,7 @@ final class StudioModel: ObservableObject {
         workspaceObservers.removeAll(); observers.removeAll(); distributedObservers.removeAll()
     }
     private func setSessionAvailable(_ available: Bool) {
-        engine.cancelAll(reason: "Session changed")
+        cancelActions(reason: "Session changed")
         sessionAvailable = available
         refreshOutputGate(reason: "Session changed")
         if !available { device.stop(); deviceStarted = false }
@@ -184,13 +209,14 @@ final class StudioModel: ObservableObject {
     }
     private func foregroundChanged(_ app: NSRunningApplication?) {
         if lastForegroundPID != app?.processIdentifier {
-            engine.cancelAll(reason: "Foreground application changed")
+            cancelActions(reason: "Foreground application changed")
             activeControls.removeAll()
         }
         lastForegroundPID = app?.processIdentifier
         output.expectedForegroundPID = app?.processIdentifier
         activeAppName = app?.localizedName ?? "No active app"
         activeBundleID = app?.bundleIdentifier
+        observeFocus()
         contextChanged(reason: "Foreground application changed")
     }
     private func reconcileForeground() {
@@ -201,7 +227,7 @@ final class StudioModel: ObservableObject {
     }
     private func contextChanged(reason: String) {
         queuedGroupChange = nil
-        engine.cancelAll(reason: reason)
+        cancelActions(reason: reason)
         syncEffectiveGroup()
         refreshOutputGate(reason: reason)
     }
@@ -213,14 +239,70 @@ final class StudioModel: ObservableObject {
         device.setGroup(group, slot: index + 1)
         onStatusChange?()
     }
+    private func cancelActions(reason: String) {
+        focusObserver.cancelNumericAdjustments()
+        engine.cancelAll(reason: reason)
+    }
     private func input(_ control: ControlID, down: Bool) {
         reconcileForeground()
+        expireFocusIfNeeded()
         if down { activeControls.insert(control) } else if !control.isDial { activeControls.remove(control) }
         if control.isDial {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self?.activeControls.remove(control) }
         }
-        guard !IsSecureEventInputEnabled(), output.enabled, let binding = effectiveGroup.binding(for: control) else { return }
+        guard !IsSecureEventInputEnabled(), output.enabled,
+              let binding = effectiveProfile.binding(for: control, focus: focusedInput) else { return }
+        if control.isDial && binding.dialBehavior == .smart {
+            if down { smartDial(binding) }
+            return
+        }
         engine.handle(control: control, isDown: down, binding: binding, now: ProcessInfo.processInfo.systemUptime)
+    }
+    private func smartDial(_ binding: ControlBinding) {
+        engine.prepareSmartDial(binding.controlID)
+        guard let settings = binding.smart,
+              let choice = settings.selection(for: output.physicalModifiers) else {
+            focusObserver.cancelNumericAdjustments()
+            return
+        }
+        if let shortcut = choice.shortcut {
+            record(output.smartShortcut(shortcut) ? "Smart · custom shortcut sent" : "Smart · shortcut unavailable")
+            return
+        }
+        let focus = focusedInput
+        if focus.kind == .unavailable {
+            if settings.fallbackToActions {
+                var fallback = binding; fallback.dialBehavior = .perStep
+                engine.handle(control: binding.controlID, isDown: true, binding: fallback,
+                              now: ProcessInfo.processInfo.systemUptime)
+            } else { record("Smart · no identified input; no action") }
+            return
+        }
+        let expectedRevision = revision
+        let expectedProfile = effectiveProfile.id
+        let expectedPID = lastForegroundPID
+        let delta = settings.direction == .increase ? choice.step : -choice.step
+        let allowText = SmartDialHeuristics.allowsTextField(focus, detection: settings.detection)
+        focusObserver.adjustNumeric(token: focus.token, delta: delta, allowTextField: allowText) { [weak self] result in
+            guard let self else { return }
+            self.reconcileForeground()
+            guard self.output.enabled, self.revision == expectedRevision,
+                  self.effectiveProfile.id == expectedProfile, self.lastForegroundPID == expectedPID,
+                  self.focusedInput.token == focus.token else { return }
+            switch result {
+            case .applied: self.record("Smart · numeric adjustment accepted")
+            case .unsupported:
+                if settings.fallbackToActions {
+                    var fallback = binding
+                    fallback.dialBehavior = .perStep
+                    self.engine.handle(control: binding.controlID, isDown: true, binding: fallback,
+                                       now: ProcessInfo.processInfo.systemUptime)
+                    self.record("Smart · configured fallback")
+                } else { self.record("Smart · field unavailable; no action") }
+            case .cancelled: break
+            case .failed: self.record("Smart · app did not confirm adjustment; no fallback sent")
+            }
+        }
     }
     private func queueGroupChange(_ offset: Int) {
         if let pending = queuedGroupChange, pending.profile == effectiveProfile.id, pending.revision == revision {
@@ -243,10 +325,12 @@ final class StudioModel: ObservableObject {
     }
     private func refreshOutputGate(reason: String) {
         let enabled = !paused && !huionRunning && !handedToHuion && sessionAvailable && !secureInput && ready &&
+            focusedInput.kind != .secure &&
             accessibilityAllowed && inputAllowed && output.observing && lastForegroundPID != nil &&
             activeBundleID != nil && activeBundleID != Bundle.main.bundleIdentifier
-        if output.enabled && !enabled { queuedGroupChange = nil; engine.cancelAll(reason: reason) }
+        if output.enabled && !enabled { queuedGroupChange = nil; cancelActions(reason: reason) }
         output.enabled = enabled
+        observeFocus()
         onStatusChange?()
     }
     func checkPermissions() {
@@ -260,32 +344,74 @@ final class StudioModel: ObservableObject {
         if bluetoothAllowed != bluetooth { bluetoothAllowed = bluetooth }
         if loginEnabled != login { loginEnabled = login }
         let secure = IsSecureEventInputEnabled()
-        if secure != secureInput { engine.cancelAll(reason: "Secure input changed"); secureInput = secure }
+        if secure != secureInput { cancelActions(reason: "Secure input changed"); secureInput = secure }
         let huion = NSWorkspace.shared.runningApplications.contains {
             ($0.bundleIdentifier?.lowercased().contains("huion") == true) ||
             ($0.localizedName?.lowercased().contains("huion") == true)
         }
         if huionRunning != huion { huionRunning = huion }
         if inputAllowed && accessibilityAllowed && !output.observing { output.startObserving() }
-        if wasAllowed && !inputAllowed { engine.cancelAll(reason: "Input permission revoked"); output.stopObserving() }
+        if wasAllowed && !inputAllowed { cancelActions(reason: "Input permission revoked"); output.stopObserving() }
         refreshOutputGate(reason: "Runtime access changed")
+        observeFocus()
         reconcileDevice()
     }
+
+    private func observeFocus() {
+        let appHasProfile = document.profiles.contains { $0.appBundleIdentifier == activeBundleID && activeBundleID != nil }
+        let needsSmart = effectiveGroup.controls.contains { $0.dialBehavior == .smart }
+        focusObserver.observe(pid: lastForegroundPID, bundleIdentifier: activeBundleID,
+            enabled: accessibilityAllowed && !secureInput && sessionAvailable && (appHasProfile || needsSmart) &&
+                activeBundleID != Bundle.main.bundleIdentifier)
+    }
+    private func focusChanged(_ snapshot: FocusSnapshot) {
+        focusConfirmedAt = ProcessInfo.processInfo.systemUptime
+        guard snapshot != focusedInput else { return }
+        cancelActions(reason: "Focused control changed")
+        activeControls.removeAll()
+        focusedInput = snapshot
+        if snapshot.kind != .unavailable && snapshot.kind != .secure {
+            lastExternalFocus = snapshot
+            lastExternalFocusAt = Date()
+        }
+        refreshOutputGate(reason: "Focused control changed")
+    }
+    private func expireFocusIfNeeded() {
+        if focusedInput.kind != .unavailable && ProcessInfo.processInfo.systemUptime - focusConfirmedAt > 0.8 {
+            focusChanged(FocusSnapshot())
+        }
+    }
+    func saveContextRule(_ rule: FocusRule) throws {
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(rule)) as! [String: Any]
+        _ = try configuration.handle(operation: "contextRules.set", arguments: ["profileId": editorProfile.id,
+            "rule": object, "expectedRevision": revision])
+    }
+    func deleteContextRule(_ id: String) { perform("contextRules.delete", ["profileId": editorProfile.id, "ruleId": id]) }
+    func moveContextRule(_ id: String, direction: String) { perform("contextRules.move", ["profileId": editorProfile.id, "ruleId": id, "direction": direction]) }
+    func icon(for profile: KeydialProfile) -> NSImage? {
+        guard let bundle = profile.appBundleIdentifier else { return nil }
+        if let icon = appIcons[bundle] { return icon }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else { return nil }
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        appIcons[bundle] = icon
+        return icon
+    }
+    func selectActiveGroup(_ id: String) { perform("groups.select", ["profileId": effectiveProfile.id, "groupId": id]) }
     private func reconcileDevice() {
         if !huionRunning && !handedToHuion && inputAllowed && sessionAvailable {
             if !deviceStarted { deviceStarted = true; device.start() }
         } else if deviceStarted {
-            engine.cancelAll(reason: "Device access suspended")
+            cancelActions(reason: "Device access suspended")
             device.stop(); deviceStarted = false
         }
     }
     func emergencyRelease() {
-        engine.cancelAll(reason: "Emergency release")
+        cancelActions(reason: "Emergency release")
         activeControls.removeAll()
         record("All synthesized holds released; pending macros canceled")
     }
     func reconnect() {
-        engine.cancelAll(reason: "Reconnect requested")
+        cancelActions(reason: "Reconnect requested")
         device.stop(); deviceStarted = false; reconcileDevice()
     }
     func requestAccessibility() {
@@ -309,7 +435,7 @@ final class StudioModel: ObservableObject {
         _ = try configuration.handle(operation: "bindings.set", arguments: ["profileId": editorProfile.id,
             "groupId": editorGroup.id, "binding": object, "expectedRevision": revision])
     }
-    func selectGroup(_ id: String) { perform("groups.select", ["profileId": editorProfile.id, "groupId": id]) }
+    func selectGroup(_ id: String) { editingContextGroupID = nil; perform("groups.select", ["profileId": editorProfile.id, "groupId": id]) }
     func renameGroup(_ name: String) { perform("groups.rename", ["profileId": editorProfile.id, "groupId": editorGroup.id, "name": name]) }
     func renameProfile(_ name: String) { perform("profiles.update", ["profileId": editorProfile.id, "name": name]) }
     func deleteProfile() { perform("profiles.delete", ["profileId": editorProfile.id]) }
@@ -387,6 +513,8 @@ final class StudioModel: ObservableObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         candidate.profiles[index].groups = KeydialProfile(name: "Default").groups
         candidate.profiles[index].selectedGroupID = "group-1"
+        candidate.profiles[index].contextRules = []
+        editingContextGroupID = nil
         replace(candidate)
     }
     func duplicateProfile() {
@@ -435,7 +563,7 @@ final class StudioModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.checkPermissions() }
     }
     func returnToHuion() {
-        engine.cancelAll(reason: "Return to Huion")
+        cancelActions(reason: "Return to Huion")
         handedToHuion = true; paused = true
         device.stop(); deviceStarted = false
         let url = URL(fileURLWithPath: "/Applications/HuionKeyboard.app")
@@ -454,7 +582,7 @@ final class StudioModel: ObservableObject {
         }
         let value: Int?; let display: String
         switch response.value {
-        case .batteryBucket(let v): value = v; display = "\(v)% bucket"
+        case .batteryBucket(let v): value = v; display = v == 100 ? "Full" : "Approx. \(v)%"
         case .brightnessLevel(let v): value = v; display = "Level \(v)"
         case .dormantLevel(let v):
             value = v
@@ -476,6 +604,16 @@ final class StudioModel: ObservableObject {
     }
     private func handleAgent(_ operation: String, arguments: [String: Any]) throws -> [String: Any] {
         switch operation {
+        case "runtime.focus":
+            guard arguments.isEmpty else { throw MCPInputError(reason: "Unexpected focus arguments") }
+            expireFocusIfNeeded()
+            let current = try JSONSerialization.jsonObject(with: JSONEncoder().encode(focusedInput))
+            let last: Any = try lastExternalFocus.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) } ?? NSNull()
+            return ["current": current, "lastObserved": last,
+                    "lastObservedAt": lastExternalFocusAt.map { ISO8601DateFormatter().string(from: $0) } as Any? ?? NSNull(),
+                    "matchedRuleId": activeContextRule?.id as Any? ?? NSNull(),
+                    "dialGroupId": activeContextRule?.targetGroupID ?? effectiveGroup.id,
+                    "note": "Accessibility metadata only. Field contents are not exposed here. Numeric values are read only for an explicitly configured Smart adjustment. Last observed is historical, not the current routing target."]
         case "runtime.get":
             guard arguments.isEmpty else { throw MCPInputError(reason: "Unexpected runtime arguments") }
             return ["revision": revision, "activeApp": activeAppName,

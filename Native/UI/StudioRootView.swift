@@ -3,7 +3,6 @@ import AppKit
 
 struct StudioRootView: View {
     @ObservedObject var model: StudioModel
-    @State private var showSettings = false
     @State private var profileName = ""
     @State private var groupName = ""
     @State private var confirmDelete = false
@@ -27,8 +26,10 @@ struct StudioRootView: View {
         .frame(minWidth: 1050, minHeight: 680)
         .onAppear { refreshNames() }
         .onChange(of: model.selectedProfileID) { _, _ in refreshNames() }
+        .onChange(of: model.editingContextGroupID) { _, _ in refreshNames() }
         .onChange(of: model.revision) { _, _ in refreshNames() }
-        .sheet(isPresented: $showSettings) { StudioSettingsView(model: model) }
+        .sheet(isPresented: $model.showingSettings) { StudioSettingsView(model: model) }
+        .sheet(isPresented: $model.showingContextRules) { FocusRulesView(model: model) }
         .sheet(isPresented: $showHuionImport) { HuionImportView(apply: model.importHuion) }
         .alert("KDCustom", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }
@@ -40,7 +41,7 @@ struct StudioRootView: View {
     private func refreshNames() { profileName = model.editorProfile.name; groupName = model.editorGroup.name }
     private var toolbar: some View {
         HStack(spacing: 14) {
-            Image(systemName: "circle.hexagongrid.fill").font(.system(size: 24)).foregroundStyle(StudioTheme.accent)
+            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 36, height: 36)
             VStack(alignment: .leading, spacing: 3) {
                 Text("KDCustom").font(StudioTheme.font(19, weight: .medium))
                 Text("KEYDIAL CONTROL STUDIO").font(StudioTheme.font(9, weight: .medium)).tracking(1.8).foregroundStyle(StudioTheme.secondaryText)
@@ -54,7 +55,9 @@ struct StudioRootView: View {
             Button { model.paused.toggle() } label: {
                 Label(model.paused ? "Resume" : "Pause", systemImage: model.paused ? "play.fill" : "pause.fill")
             }.buttonStyle(.bordered).help("Suspend all shortcut output")
-            Button { showSettings = true } label: { Image(systemName: "gearshape") }
+            Button { model.showingContextRules = true } label: { Label("Intelligent dials", systemImage: "scope") }
+                .buttonStyle(.bordered)
+            Button { model.showingSettings = true } label: { Image(systemName: "gearshape") }
                 .buttonStyle(.borderless).font(.system(size: 18)).help("Settings and connection")
                 .accessibilityLabel("Settings and connection")
         }.padding(.horizontal, 22).frame(height: 73)
@@ -72,8 +75,12 @@ struct StudioRootView: View {
                     ForEach(model.document.profiles, id: \.id) { profile in
                         Button { model.selectedProfileID = profile.id } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: profile.appBundleIdentifier == nil ? "globe" : "app")
-                                    .frame(width: 19).foregroundStyle(StudioTheme.secondaryText)
+                                if let icon = model.icon(for: profile) {
+                                    Image(nsImage: icon).resizable().scaledToFit().frame(width: 24, height: 24)
+                                } else {
+                                    Image(systemName: profile.appBundleIdentifier == nil ? "globe" : "app")
+                                        .frame(width: 24, height: 24).foregroundStyle(StudioTheme.secondaryText)
+                                }
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(profile.name).font(StudioTheme.font(13, weight: .medium)).lineLimit(1)
                                     Text(profile.appBundleIdentifier == nil ? "Fallback for every app" : profile.appBundleIdentifier!)
@@ -153,17 +160,35 @@ struct StudioRootView: View {
     }
 
     private var inspector: some View {
-        BindingDraftEditor(binding: model.currentBinding, wide: !portrait, save: model.saveBinding)
-            .id(model.selectedProfileID + "/" + model.editorGroup.id + "/" + model.selectedControl.rawValue)
+        VStack(spacing: 0) {
+            if model.editingContextGroupID != nil {
+                HStack {
+                    Text("Editing context dial group · default remains \(model.editorProfile.selectedGroup?.name ?? "Group 1")")
+                    Spacer()
+                    Button("Back to default") { model.editingContextGroupID = nil }
+                }.font(StudioTheme.font(11)).foregroundStyle(StudioTheme.accent).padding(10)
+            }
+            BindingDraftEditor(binding: model.currentBinding, wide: !portrait, save: model.saveBinding)
+                .id(model.selectedProfileID + "/" + model.editorGroup.id + "/" + model.selectedControl.rawValue)
+        }
     }
 
     private var devicePreview: some View {
-        DeviceIllustration(selectedControl: model.selectedControl, activeControls: model.activeControls,
-            labels: Dictionary(uniqueKeysWithValues: model.editorGroup.controls.map { ($0.controlID, $0.label) }),
-            groupName: model.editorGroup.name,
-            groupNumber: (model.editorProfile.groups.firstIndex(where: { $0.id == model.editorGroup.id }) ?? 0) + 1,
+        let base = model.editorProfile.selectedGroup ?? model.editorProfile.groups[0]
+        let preview = model.editingContextGroupID == nil ? model.editorGroup : base
+        let labels = preview.controls.map { control in
+            let source = control.controlID.isDial ? model.editorGroup.binding(for: control.controlID) ?? control : control
+            return (source.controlID, source.label)
+        }
+        return DeviceIllustration(selectedControl: model.selectedControl, activeControls: model.activeControls,
+            labels: Dictionary(uniqueKeysWithValues: labels),
+            groupName: preview.name,
+            groupNumber: (model.editorProfile.groups.firstIndex(where: { $0.id == preview.id }) ?? 0) + 1,
             orientationDegrees: model.orientationDegrees, batteryPercent: model.batteryBucket,
-            connection: model.ready ? model.transport : nil, onSelect: { model.selectedControl = $0 })
+            connection: model.ready ? model.transport : nil, onSelect: {
+                if model.editingContextGroupID != nil && !$0.isDial { model.editingContextGroupID = nil }
+                model.selectedControl = $0
+            })
     }
 
     private var profileHeader: some View {
@@ -199,7 +224,9 @@ struct StudioRootView: View {
                 Text("GROUP").font(StudioTheme.font(9, weight: .medium)).tracking(1.4).foregroundStyle(StudioTheme.mutedText)
                 TextField("Group name", text: $groupName, onCommit: { model.renameGroup(groupName) })
                     .textFieldStyle(.plain).font(StudioTheme.font(13, weight: .medium))
-                if model.editorProfile.id == model.effectiveProfile.id {
+                if model.editingContextGroupID != nil {
+                    Text("CONTEXT DIALS").font(StudioTheme.font(9, weight: .medium)).foregroundStyle(StudioTheme.accent)
+                } else if model.editorProfile.id == model.effectiveProfile.id {
                     Text("ACTIVE").font(StudioTheme.font(9, weight: .medium)).tracking(1).foregroundStyle(StudioTheme.accent)
                 }
             }
@@ -212,7 +239,7 @@ struct StudioRootView: View {
             HStack {
                 Text(model.huionRunning ? "Quit Huion Keyboard so KDCustom can connect." : "Open Settings to finish device access.")
                     .foregroundStyle(StudioTheme.secondaryText)
-                Button("Open settings") { showSettings = true }.buttonStyle(.bordered)
+                Button("Open settings") { model.showingSettings = true }.buttonStyle(.bordered)
             }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(StudioTheme.panel)
         }
     }
@@ -282,6 +309,7 @@ private struct StudioSettingsView: View {
                     }
                 }
                 Button("Check keyboard output…") { OutputVerifier.shared.show() }
+                Button("Check Smart numeric input…") { SmartInputVerifier.shared.show() }
                 Button("Export diagnostics…") { model.exportDiagnostics() }
                 DisclosureGroup("Connection diagnostics", isExpanded: $showDiagnostics) {
                     ScrollView {

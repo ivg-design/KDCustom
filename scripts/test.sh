@@ -17,7 +17,11 @@ run DeviceCommand Native/Device/K40DeviceCommands.swift
 CORE=(Native/Core/Models.swift Native/Core/ProfileStore.swift)
 run ProfileStore "${CORE[@]}"
 run ActionEngine Native/Core/Models.swift Native/Core/ActionEngine.swift
-run ShortcutRecorder Native/Core/Models.swift Native/UI/StudioTheme.swift Native/UI/BindingEditor.swift -framework AppKit -framework SwiftUI
+run FocusContext "${CORE[@]}"
+run SmartDial "${CORE[@]}" Native/MCP/MCPTools.swift
+run SmartHeuristics Native/Core/Models.swift Native/Core/SmartDialHeuristics.swift
+run NumericAdjustment Native/Core/NumericAdjustment.swift
+run ShortcutRecorder Native/Core/Models.swift Native/UI/StudioTheme.swift Native/UI/BindingEditor.swift Native/UI/SmartDialEditor.swift -framework AppKit -framework SwiftUI
 run ConfigurationService "${CORE[@]}" Native/Core/ConfigurationService.swift
 run HuionImport "${CORE[@]}" Native/Core/HuionImporter.swift
 run MCP "${CORE[@]}" Native/MCP/MCPTools.swift Native/MCP/MCPServer.swift

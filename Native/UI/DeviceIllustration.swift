@@ -97,14 +97,16 @@ struct DeviceIllustration: View {
             }
 
             screen.frame(width: 378, height: 136).position(x: 622, y: 238)
-            physicalKey(.key1, title: "1", kind: .topLeft, width: 120, height: 66).position(x: 410, y: 110)
-            physicalKey(.key2, title: "2", kind: .middle, width: 116, height: 66).position(x: 529, y: 110)
-            physicalKey(.key3, title: "3", kind: .middle, width: 116, height: 66).position(x: 647, y: 110)
-            physicalKey(.key4, title: "4", kind: .topRight, width: 120, height: 66).position(x: 767, y: 110)
-            physicalKey(.key5, title: "5", kind: .bottomLeft, width: 120, height: 66).position(x: 410, y: 368)
-            physicalKey(.key6, title: "6", kind: .middle, width: 116, height: 66).position(x: 529, y: 368)
-            physicalKey(.key7, title: "7", kind: .middle, width: 116, height: 66).position(x: 647, y: 368)
-            physicalKey(.key8, title: "8", kind: .bottomRight, width: 120, height: 66).position(x: 767, y: 368)
+            // Face bounds follow the eight photographed seams after rotating
+            // the 1190 × 2501 source into this 1000 × 476 canvas.
+            physicalKey(.key1, title: "1", kind: .topLeft, width: 119, height: 68).position(x: 415, y: 109)
+            physicalKey(.key2, title: "2", kind: .middle, width: 117, height: 68).position(x: 535, y: 109)
+            physicalKey(.key3, title: "3", kind: .middle, width: 117, height: 68).position(x: 654, y: 109)
+            physicalKey(.key4, title: "4", kind: .topRight, width: 119, height: 68).position(x: 773, y: 109)
+            physicalKey(.key5, title: "5", kind: .bottomLeft, width: 119, height: 68).position(x: 415, y: 370)
+            physicalKey(.key6, title: "6", kind: .middle, width: 117, height: 68).position(x: 535, y: 370)
+            physicalKey(.key7, title: "7", kind: .middle, width: 117, height: 68).position(x: 654, y: 370)
+            physicalKey(.key8, title: "8", kind: .bottomRight, width: 119, height: 68).position(x: 773, y: 370)
 
             outerDial.frame(width: 378, height: 378).position(x: 203, y: 238)
             innerDial.frame(width: 285, height: 285).position(x: 203, y: 238)
@@ -185,7 +187,9 @@ struct DeviceIllustration: View {
                 .frame(maxHeight: .infinity)
             }
         }
-        .padding(portrait ? 11 : 17)
+        .padding(.horizontal, portrait ? 10 : 14)
+        .padding(.top, portrait ? 7 : 8)
+        .padding(.bottom, portrait ? 11 : 14)
     }
 
     private func batterySymbol(for percent: Int) -> String {
@@ -248,25 +252,38 @@ struct DeviceIllustration: View {
     }
 
     private func directions(_ name: String, cw: ControlID, ccw: ControlID) -> some View {
-        HStack(spacing: 8) {
+        let fallback = name.hasPrefix("INNER") ? "Inner" : "Outer"
+        return VStack(alignment: .leading, spacing: 6) {
             Text(name).font(StudioTheme.font(11, weight: .medium)).tracking(1.4)
                 .foregroundStyle(StudioTheme.secondaryText)
-            ForEach([ccw, cw], id: \.self) { id in
-                Button { onSelect(id) } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: id == cw ? "arrow.clockwise" : "arrow.counterclockwise")
-                            .font(.system(size: 16, weight: .medium))
-                            .frame(width: 17, height: 17)
-                        Text(id == cw ? "CW" : "CCW")
-                            .font(StudioTheme.font(13, weight: .medium))
-                    }
-                        .padding(.horizontal, 10).padding(.vertical, 7)
+            HStack(spacing: 7) {
+                ForEach([ccw, cw], id: \.self) { id in
+                    let assignment = labels[id].flatMap { $0.isEmpty ? nil : $0 } ?? fallback
+                    Button { onSelect(id) } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 5) {
+                                Image(systemName: id == cw ? "arrow.clockwise" : "arrow.counterclockwise")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .frame(width: 17, height: 17)
+                                Text(id == cw ? "CW" : "CCW")
+                                    .font(StudioTheme.font(13, weight: .medium))
+                            }
+                            Text(assignment)
+                                .font(StudioTheme.font(11))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .foregroundStyle(selectedControl == id ? StudioTheme.accent : StudioTheme.secondaryText)
+                        }
+                        .frame(width: 103, alignment: .leading)
+                        .padding(.horizontal, 9).padding(.vertical, 7)
                         .background(selectedControl == id ? StudioTheme.accentSoft : StudioTheme.panelRaised,
                                     in: RoundedRectangle(cornerRadius: 6))
-                        .foregroundStyle(selectedControl == id ? StudioTheme.accent : StudioTheme.secondaryText)
+                        .foregroundStyle(selectedControl == id ? StudioTheme.accent : StudioTheme.text)
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(name) \(id == cw ? "clockwise" : "counterclockwise"): \(assignment)")
+                    .accessibilityLabel("\(name) \(id == cw ? "clockwise" : "counterclockwise"), \(assignment)")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(name) \(id == cw ? "clockwise" : "counterclockwise")")
             }
         }
     }
@@ -286,8 +303,9 @@ private struct DialAnnulus: Shape {
     }
 }
 
-/// Small insets keep the amber selected outline inside each photographed key
-/// face, including the angled end keys and curved group-button segments.
+/// These paths trace the photographed face seams, rather than framing the
+/// buttons with generic rectangles. The small inset keeps amber inside the
+/// black gaps between neighboring keys.
 private struct PhysicalKeyShape: Shape {
     enum Kind { case topLeft, middle, topRight, bottomLeft, bottomRight, previous, next }
     let kind: Kind
@@ -299,38 +317,47 @@ private struct PhysicalKeyShape: Shape {
         var path = Path()
         switch kind {
         case .middle:
-            path.addRoundedRect(in: rect.insetBy(dx: 2, dy: 3), cornerSize: CGSize(width: 4, height: 4))
+            path.move(to: point(0.06, 0.025))
+            path.addLine(to: point(0.94, 0.025))
+            path.addQuadCurve(to: point(0.985, 0.10), control: point(0.985, 0.025))
+            path.addLine(to: point(0.985, 0.90))
+            path.addQuadCurve(to: point(0.94, 0.975), control: point(0.985, 0.975))
+            path.addLine(to: point(0.06, 0.975))
+            path.addQuadCurve(to: point(0.015, 0.90), control: point(0.015, 0.975))
+            path.addLine(to: point(0.015, 0.10))
+            path.addQuadCurve(to: point(0.06, 0.025), control: point(0.015, 0.025))
+            path.closeSubpath()
         case .topLeft:
-            path.move(to: point(0.13, 0.05))
-            path.addLine(to: point(0.98, 0.05))
-            path.addLine(to: point(0.98, 0.95))
-            path.addLine(to: point(0.39, 0.95))
-            path.addQuadCurve(to: point(0.29, 0.86), control: point(0.34, 0.95))
-            path.addLine(to: point(0.04, 0.36))
-            path.addQuadCurve(to: point(0.13, 0.05), control: point(0.00, 0.06))
+            path.move(to: point(0.105, 0.025))
+            path.addLine(to: point(0.985, 0.025))
+            path.addLine(to: point(0.985, 0.975))
+            path.addLine(to: point(0.315, 0.975))
+            path.addQuadCurve(to: point(0.26, 0.90), control: point(0.28, 0.975))
+            path.addLine(to: point(0.025, 0.38))
+            path.addQuadCurve(to: point(0.105, 0.025), control: point(-0.015, 0.12))
             path.closeSubpath()
         case .topRight:
-            path.move(to: point(0.02, 0.05))
-            path.addLine(to: point(0.88, 0.05))
-            path.addQuadCurve(to: point(0.98, 0.16), control: point(0.98, 0.05))
-            path.addLine(to: point(0.98, 0.95))
-            path.addLine(to: point(0.02, 0.95))
+            path.move(to: point(0.015, 0.025))
+            path.addLine(to: point(0.875, 0.025))
+            path.addQuadCurve(to: point(0.985, 0.16), control: point(0.985, 0.025))
+            path.addLine(to: point(0.985, 0.975))
+            path.addLine(to: point(0.015, 0.975))
             path.closeSubpath()
         case .bottomLeft:
-            path.move(to: point(0.39, 0.05))
-            path.addLine(to: point(0.98, 0.05))
-            path.addLine(to: point(0.98, 0.95))
-            path.addLine(to: point(0.13, 0.95))
-            path.addQuadCurve(to: point(0.04, 0.64), control: point(0.00, 0.94))
-            path.addLine(to: point(0.29, 0.14))
-            path.addQuadCurve(to: point(0.39, 0.05), control: point(0.34, 0.05))
+            path.move(to: point(0.315, 0.025))
+            path.addLine(to: point(0.985, 0.025))
+            path.addLine(to: point(0.985, 0.975))
+            path.addLine(to: point(0.105, 0.975))
+            path.addQuadCurve(to: point(0.025, 0.62), control: point(-0.015, 0.88))
+            path.addLine(to: point(0.26, 0.10))
+            path.addQuadCurve(to: point(0.315, 0.025), control: point(0.28, 0.025))
             path.closeSubpath()
         case .bottomRight:
-            path.move(to: point(0.02, 0.05))
-            path.addLine(to: point(0.98, 0.05))
-            path.addLine(to: point(0.98, 0.84))
-            path.addQuadCurve(to: point(0.88, 0.95), control: point(0.98, 0.95))
-            path.addLine(to: point(0.02, 0.95))
+            path.move(to: point(0.015, 0.025))
+            path.addLine(to: point(0.985, 0.025))
+            path.addLine(to: point(0.985, 0.84))
+            path.addQuadCurve(to: point(0.875, 0.975), control: point(0.985, 0.975))
+            path.addLine(to: point(0.015, 0.975))
             path.closeSubpath()
         case .previous:
             path.move(to: point(0.03, 0.03))

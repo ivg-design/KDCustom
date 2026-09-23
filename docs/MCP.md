@@ -56,7 +56,13 @@ All mutating configuration tools require a nonempty opaque string `expectedRevis
 | `kdcustom_get_device_settings` | `device.getSettings` | none | Cached observed settings and availability |
 | `kdcustom_query_device_setting` | `device.querySetting` | `setting`: `battery`, `brightness`, `sleep`, or `rotation` | Query one allowlisted device setting |
 
-`binding` is the complete JSON form of `ControlBinding`, including `controlID`, `label`, `pressActions`, `releaseActions`, `buttonBehavior`, `dialBehavior`, `repeatIntervalMilliseconds`, `heldModifiers`, `idleTimeoutMilliseconds`, `macroRetriggerPolicy`, `queueLimit`, and `macroRepeatCount`. Each action step uses the core `ActionStep` tagged shape (`kind`, `repeatCount`, and the fields required by that kind). For example:
+| `kdcustom_list_context_rules` | `contextRules.list` | `profileId` | Ordered focus rules |
+| `kdcustom_set_context_rule` | `contextRules.set` | `expectedRevision`, `profileId`, `rule` | Add or replace a focus rule |
+| `kdcustom_delete_context_rule` | `contextRules.delete` | `expectedRevision`, `profileId`, `ruleId` | Remove a focus rule |
+| `kdcustom_move_context_rule` | `contextRules.move` | `expectedRevision`, `profileId`, `ruleId`, `direction`: `up` or `down` | Change rule priority |
+| `kdcustom_get_focused_input` | `runtime.focus` | none | Current and last observed metadata; never field contents |
+
+`binding` is the complete JSON form of `ControlBinding`, including `controlID`, `label`, `pressActions`, `releaseActions`, `buttonBehavior`, `dialBehavior`, `repeatIntervalMilliseconds`, `heldModifiers`, `idleTimeoutMilliseconds`, `macroRetriggerPolicy`, `queueLimit`, and `macroRepeatCount`, plus optional `smart`. Each action step uses the core `ActionStep` tagged shape (`kind`, `repeatCount`, and the fields required by that kind). For example:
 
 ```json
 {
@@ -64,13 +70,13 @@ All mutating configuration tools require a nonempty opaque string `expectedRevis
   "label": "Zoom out",
   "pressActions": [
     {"kind": "keyTap", "repeatCount": 1, "keyCode": 27,
-     "modifiers": {"rawValue": 1048576}}
+     "modifiers": 1048576}
   ],
   "releaseActions": [],
   "buttonBehavior": "pressRelease",
   "dialBehavior": "perStep",
   "repeatIntervalMilliseconds": 100,
-  "heldModifiers": {"rawValue": 0},
+  "heldModifiers": 0,
   "idleTimeoutMilliseconds": 250,
   "macroRetriggerPolicy": "queue",
   "queueLimit": 8,
@@ -78,7 +84,7 @@ All mutating configuration tools require a nonempty opaque string `expectedRevis
 }
 ```
 
-The batch tool accepts only these nested tool names: `kdcustom_create_profile`, `kdcustom_update_profile`, `kdcustom_delete_profile`, `kdcustom_rename_group`, `kdcustom_select_group`, and `kdcustom_set_binding`. Nested `arguments` omit `expectedRevision`; the outer revision applies to the whole transaction:
+The batch tool accepts only these nested tool names: `kdcustom_create_profile`, `kdcustom_update_profile`, `kdcustom_delete_profile`, `kdcustom_rename_group`, `kdcustom_select_group`, `kdcustom_set_binding`, `kdcustom_set_context_rule`, `kdcustom_delete_context_rule`, and `kdcustom_move_context_rule`. Nested `arguments` omit `expectedRevision`; the outer revision applies to the whole transaction:
 
 ```json
 {
@@ -99,3 +105,13 @@ bash scripts/test.sh
 ```
 
 The focused suites include MCP protocol parsing, private bridge behavior, configuration atomicity and rollback, and the shared core models. A passing suite does not replace an installed-app permission or live-device check.
+
+## Smart configuration
+
+The tool catalog exposes 19 tools. Set `dialBehavior` to `smart` and include a `smart` object with `direction` (`increase`/`decrease`), `detection` (`automatic`/`numericField`), `step`, optional `shortcut`, `modifierRules`, and `fallbackToActions`. Each modifier rule has `id`, `name`, exact physical `modifiers`, `step`, and optional `shortcut`. A shortcut contains `keyCode`, `modifiers`, and `repeatCount`. Modifiers use the same numeric bitmask as normal bindings (Command=1048576, Option=524288, Shift=131072, Control=262144, Fn=8388608). Fetch the complete binding before editing it.
+
+Focused-input rule fields are `id`, `name`, `enabled`, `targetGroupID` and at least one optional criterion: `kind` (`numeric`/`text`/`other`), `role`, `identifier`, `labelContains`. Global rules, secure/unavailable targets, missing groups, duplicate IDs and invalid criteria are rejected. Rule order is meaningful; the first enabled match wins. Changing a context group's dial bindings never selects that group as the profile's default.
+
+See [Smart dials](SMART-DIALS.md) for numeric behavior, fallback semantics and app-specific limits. Agent tools configure these behaviors but cannot trigger a numeric adjustment or execute a shortcut.
+
+For Codex's shared configuration, run `codex mcp add kdcustom -- '/Applications/Keydial Studio.app/Contents/MacOS/KeydialStudio' --mcp`. New server tools appear after the client reloads its MCP configuration.

@@ -92,6 +92,14 @@ final class ConfigurationService {
                 "selectedGroupID": profile.selectedGroupID,
                 "groups": profile.groups.map { ["id": $0.id, "name": $0.name] }
             ]
+        case "contextRules.list":
+            try expect(arguments, required: ["profileId"], allowed: ["profileId"])
+            let id = try string(arguments, "profileId")
+            guard let profile = document.profiles.first(where: { $0.id == id }) else {
+                throw ConfigurationServiceError.notFound("profile \(id)")
+            }
+            return ["revision": revision, "profileId": id,
+                    "rules": try profile.contextRules.map { try jsonObject($0) }]
         case "bindings.get":
             try expect(arguments, required: ["profileId", "groupId", "controlId"],
                        allowed: ["profileId", "groupId", "controlId"])
@@ -133,7 +141,8 @@ final class ConfigurationService {
             }
             return results.merging(["revision": newRevision]) { _, new in new }
         case "profiles.create", "profiles.update", "profiles.delete",
-             "groups.rename", "groups.select", "bindings.set":
+             "groups.rename", "groups.select", "bindings.set",
+             "contextRules.set", "contextRules.delete", "contextRules.move":
             let expected = try string(arguments, "expectedRevision")
             let (result, newRevision) = try commit(expectedRevision: expected) { candidate in
                 try apply(operation: operation, arguments: arguments,
@@ -244,7 +253,8 @@ final class ConfigurationService {
                 "dialBehavior", "repeatIntervalMilliseconds", "heldModifiers",
                 "idleTimeoutMilliseconds", "macroRetriggerPolicy", "queueLimit", "macroRepeatCount"
             ]
-            guard Set(raw.keys) == requiredFields else {
+            guard requiredFields.isSubset(of: Set(raw.keys)),
+                  Set(raw.keys).isSubset(of: requiredFields.union(["smart"])) else {
                 throw ConfigurationServiceError.invalid("binding must contain all ControlBinding fields")
             }
             let binding: ControlBinding
@@ -265,6 +275,67 @@ final class ConfigurationService {
             candidate.profiles[profileIndex].groups[groupIndex].controls[controlIndex] = binding
             return ["profileId": profileID, "groupId": groupID,
                     "controlId": binding.controlID.rawValue]
+        case "contextRules.set":
+            try expect(arguments, required: Set(["profileId", "rule"]).union(revisionKey),
+                       allowed: Set(["profileId", "rule"]).union(revisionKey))
+            let profileID = try string(arguments, "profileId")
+            let profileIndex = try indexOfProfile(profileID, in: candidate)
+            guard profileID != candidate.globalProfileID else {
+                throw ConfigurationServiceError.invalid("Focus rules require an application profile")
+            }
+            guard let raw = arguments["rule"] as? [String: Any],
+                  JSONSerialization.isValidJSONObject(raw) else {
+                throw ConfigurationServiceError.invalid("rule must be a JSON object")
+            }
+            let required: Set<String> = ["id", "name", "enabled", "targetGroupID"]
+            let allowed = required.union(["kind", "role", "identifier", "labelContains"])
+            guard required.isSubset(of: Set(raw.keys)), Set(raw.keys).isSubset(of: allowed) else {
+                throw ConfigurationServiceError.invalid("Focus rule has missing or unexpected fields")
+            }
+            let rule: FocusRule
+            do {
+                rule = try JSONDecoder().decode(FocusRule.self,
+                                                from: JSONSerialization.data(withJSONObject: raw))
+            } catch {
+                throw ConfigurationServiceError.invalid("Cannot decode FocusRule: \(error.localizedDescription)")
+            }
+            if let index = candidate.profiles[profileIndex].contextRules.firstIndex(where: { $0.id == rule.id }) {
+                candidate.profiles[profileIndex].contextRules[index] = rule
+            } else {
+                candidate.profiles[profileIndex].contextRules.append(rule)
+            }
+            return ["profileId": profileID, "ruleId": rule.id]
+        case "contextRules.move":
+            let keys: Set<String> = ["profileId", "ruleId", "direction"]
+            try expect(arguments, required: keys.union(revisionKey), allowed: keys.union(revisionKey))
+            let profileID = try string(arguments, "profileId")
+            let ruleID = try string(arguments, "ruleId")
+            let direction = try string(arguments, "direction")
+            guard direction == "up" || direction == "down" else { throw ConfigurationServiceError.invalid("direction must be up or down") }
+            let p = try indexOfProfile(profileID, in: candidate)
+            guard let index = candidate.profiles[p].contextRules.firstIndex(where: { $0.id == ruleID }) else {
+                throw ConfigurationServiceError.notFound("focus rule \(ruleID)")
+            }
+            let target = index + (direction == "up" ? -1 : 1)
+            guard candidate.profiles[p].contextRules.indices.contains(target) else {
+                throw ConfigurationServiceError.invalid("Rule is already at this end of the list")
+            }
+            candidate.profiles[p].contextRules.swapAt(index, target)
+            return ["profileId": profileID, "ruleId": ruleID]
+        case "contextRules.delete":
+            try expect(arguments, required: Set(["profileId", "ruleId"]).union(revisionKey),
+                       allowed: Set(["profileId", "ruleId"]).union(revisionKey))
+            let profileID = try string(arguments, "profileId")
+            let ruleID = try string(arguments, "ruleId")
+            let profileIndex = try indexOfProfile(profileID, in: candidate)
+            guard profileID != candidate.globalProfileID else {
+                throw ConfigurationServiceError.invalid("Focus rules require an application profile")
+            }
+            guard let ruleIndex = candidate.profiles[profileIndex].contextRules.firstIndex(where: { $0.id == ruleID }) else {
+                throw ConfigurationServiceError.notFound("focus rule \(ruleID)")
+            }
+            candidate.profiles[profileIndex].contextRules.remove(at: ruleIndex)
+            return ["profileId": profileID, "ruleId": ruleID]
         default:
             throw ConfigurationServiceError.unsupportedOperation(operation)
         }
@@ -277,7 +348,10 @@ final class ConfigurationService {
             "kdcustom_delete_profile": "profiles.delete",
             "kdcustom_rename_group": "groups.rename",
             "kdcustom_select_group": "groups.select",
-            "kdcustom_set_binding": "bindings.set"
+            "kdcustom_set_binding": "bindings.set",
+            "kdcustom_set_context_rule": "contextRules.set",
+            "kdcustom_delete_context_rule": "contextRules.delete",
+            "kdcustom_move_context_rule": "contextRules.move"
         ][toolName]
     }
 

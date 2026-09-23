@@ -13,8 +13,12 @@ final class StudioDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow?
     private var statusItem: NSStatusItem?
     private var statusLine: NSMenuItem?
+    private var deviceLine: NSMenuItem?
+    private var focusLine: NSMenuItem?
     private var pauseItem: NSMenuItem?
     private var profilesMenu: NSMenu?
+    private var groupsMenu: NSMenu?
+    private var groupMenuSignature = ""
     private var profileMenuSignature = ""
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -57,16 +61,27 @@ final class StudioDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         editItem.submenu = edit; main.addItem(editItem); NSApp.mainMenu = main
         let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        status.button?.image = NSImage(systemSymbolName: "circle.hexagongrid", accessibilityDescription: "KDCustom")
+        let icon = NSImage(named: "MenuBarTemplate") ?? NSImage(systemSymbolName: "dial.low", accessibilityDescription: "KDCustom")
+        icon?.isTemplate = true
+        icon?.size = NSSize(width: 18, height: 18)
+        status.button?.image = icon
+        status.button?.setAccessibilityLabel("KDCustom controls")
         let menu = NSMenu()
         statusLine = menu.addItem(withTitle: "KDCustom", action: nil, keyEquivalent: "")
+        deviceLine = menu.addItem(withTitle: "Connecting", action: nil, keyEquivalent: "")
+        focusLine = menu.addItem(withTitle: "Dials · app defaults", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Open KDCustom", action: #selector(showWindow), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Intelligent dials…", action: #selector(showContextRules), keyEquivalent: "").target = self
         pauseItem = menu.addItem(withTitle: "Pause", action: #selector(togglePause), keyEquivalent: ""); pauseItem?.target = self
         menu.addItem(withTitle: "Release all holds", action: #selector(releaseHolds), keyEquivalent: "").target = self
         let profiles = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
         let submenu = NSMenu(title: "Profile"); profiles.submenu = submenu; profilesMenu = submenu
         menu.addItem(profiles)
+        let groups = NSMenuItem(title: "Group", action: nil, keyEquivalent: "")
+        let groupSubmenu = NSMenu(title: "Group"); groups.submenu = groupSubmenu; groupsMenu = groupSubmenu
+        menu.addItem(groups)
         menu.addItem(withTitle: "Reconnect device", action: #selector(reconnect), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "").target = self
@@ -76,6 +91,11 @@ final class StudioDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let model else { return }
         let title = "\(model.activeAppName) · \(model.effectiveProfile.name) · \(model.outputStatus)"
         if statusLine?.title != title { statusLine?.title = title }
+        let deviceTitle = "\(model.connection) · \(model.transport) · \(model.deviceSettings["battery"] ?? "Battery unknown")"
+        if deviceLine?.title != deviceTitle { deviceLine?.title = deviceTitle }
+        if focusLine?.title != model.focusStatus { focusLine?.title = model.focusStatus }
+        statusItem?.button?.toolTip = "KDCustom — \(title)\n\(deviceTitle)"
+        statusItem?.button?.alphaValue = model.paused ? 0.45 : (model.ready ? 1 : 0.65)
         let pauseTitle = model.paused ? "Resume controls" : "Pause controls"
         if pauseItem?.title != pauseTitle { pauseItem?.title = pauseTitle }
         let signature = model.document.profiles.map { $0.id + $0.name }.joined() + (model.lockedProfileID ?? "auto")
@@ -90,7 +110,21 @@ final class StudioDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 item.state = model.lockedProfileID == profile.id ? .on : .off
             }
         }
+        let groupSignature = model.effectiveProfile.id + model.effectiveGroup.id + model.effectiveProfile.groups.map { $0.name }.joined()
+        if groupMenuSignature != groupSignature, let menu = groupsMenu {
+            groupMenuSignature = groupSignature; menu.removeAllItems()
+            for (index, group) in model.effectiveProfile.groups.enumerated() {
+                let item = menu.addItem(withTitle: "\(index + 1) · \(group.name)", action: #selector(selectGroup(_:)), keyEquivalent: "")
+                item.target = self; item.representedObject = group.id
+                item.state = model.effectiveGroup.id == group.id ? .on : .off
+            }
+        }
     }
+    @objc private func selectGroup(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String { model?.selectActiveGroup(id) }
+    }
+    @objc private func showSettings() { showWindow(); model?.showingSettings = true }
+    @objc private func showContextRules() { showWindow(); model?.showingContextRules = true }
     @objc private func selectProfile(_ sender: NSMenuItem) { model?.lockedProfileID = sender.representedObject as? String }
     @objc private func releaseHolds() { model?.emergencyRelease() }
     @objc func showWindow() {

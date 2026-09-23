@@ -23,6 +23,7 @@ fi
   "${SOURCES[@]}" "$ROOT/build/K40USB-native.o" -o "$APP/Contents/MacOS/KeydialStudio"
 cp "$ROOT/Resources/kd-custom.png" "$APP/Contents/Resources/kd-custom.png"
 cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp "$ROOT/Resources/"MenuBarTemplate*.png "$APP/Contents/Resources/"
 python3 - "$APP" "$ROOT" <<'PY'
 import plistlib,sys
 from pathlib import Path
@@ -30,7 +31,7 @@ app,root=map(Path,sys.argv[1:])
 info={'CFBundleIdentifier':'life.mograph.KeydialStudio',
 'CFBundleName':'KDCustom','CFBundleDisplayName':'KDCustom',
 'CFBundleExecutable':'KeydialStudio','CFBundlePackageType':'APPL',
-'CFBundleShortVersionString':'0.4.1','CFBundleVersion':'9',
+'CFBundleShortVersionString':'0.5.0','CFBundleVersion':'12',
 'LSMinimumSystemVersion':'14.0','NSPrincipalClass':'NSApplication',
 'NSHighResolutionCapable':True,'CFBundleIconFile':'AppIcon','ProbeRepositoryPath':str(root),
 'NSBluetoothAlwaysUsageDescription':'Connect to your Huion Keydial for button, dial, and screen control.'}

@@ -360,6 +360,43 @@ enum ActionEngineTests {
         do {
             let output = RecordingOutput()
             let engine = ActionEngine(output: output)
+            let button = ControlBinding(controlID: .key1,
+                pressActions: [.init(.keyDown(keyCode: 49, modifiers: .command))],
+                buttonBehavior: .hold)
+            let clockwise = ControlBinding(controlID: .dial1CW,
+                pressActions: [.keyTap(24), .init(.delay(milliseconds: 500)),
+                               .init(.text("stale clockwise"))],
+                dialBehavior: .heldModifiers, heldModifiers: .shift,
+                idleTimeoutMilliseconds: 1_000)
+            let counterclockwise = ControlBinding(controlID: .dial1CCW,
+                pressActions: [.init(.delay(milliseconds: 500)),
+                               .init(.text("stale counterclockwise"))],
+                dialBehavior: .heldModifiers, heldModifiers: .shift,
+                idleTimeoutMilliseconds: 1_000, queueLimit: 2)
+            engine.handle(control: .key1, isDown: true, binding: button, now: 0)
+            engine.handle(control: .dial1CW, isDown: true, binding: clockwise, now: 0.01)
+            engine.handle(control: .dial1CCW, isDown: true, binding: counterclockwise, now: 0.02)
+            engine.handle(control: .dial1CCW, isDown: true, binding: counterclockwise, now: 0.03)
+            let before = ["down:55:\(command)", "down:49:\(command)",
+                          "down:56:\(command | shift)", "down:24:\(command | shift)",
+                          "up:24:\(command | shift)"]
+            equal(output.events, before, "opposite direction is queued while inner dial holds Shift")
+            engine.prepareSmartDial(.dial2CW)
+            equal(output.events, before, "preparing the other physical dial leaves inner work untouched")
+            engine.prepareSmartDial(.dial1CW)
+            equal(output.events, before + ["up:56:\(command)"],
+                  "Smart detent releases inner dial's idle Shift without releasing button Command or Space")
+            engine.tick(now: 2)
+            equal(output.events, before + ["up:56:\(command)"],
+                  "Smart detent cancels both directions' delayed and queued work")
+            engine.handle(control: .key1, isDown: false, binding: button, now: 2.01)
+            equal(output.events, before + ["up:56:\(command)", "up:49:\(command)", "up:55:0"],
+                  "remaining button hold releases normally and balances all synthesized keys")
+        }
+
+        do {
+            let output = RecordingOutput()
+            let engine = ActionEngine(output: output)
             let binding = ControlBinding(controlID: .dial1CW,
                 pressActions: [.init(.keyDown(keyCode: 4, modifiers: .command))])
             engine.handle(control: .dial1CW, isDown: true, binding: binding, now: 0)

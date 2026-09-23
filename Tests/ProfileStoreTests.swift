@@ -61,6 +61,9 @@ enum ProfileStoreTests {
         app.groups[3].controls[bindingIndex].macroRepeatCount = 3
         let nextIndex = app.groups[3].controls.firstIndex { $0.controlID == .setNext }!
         app.groups[3].controls[nextIndex].pressActions = [.init(.groupChange(offset: 2))]
+        app.contextRules = [FocusRule(id: "numeric-input", name: "Numeric fields",
+                                      targetGroupID: "group-4", kind: .numeric,
+                                      role: "AXTextField")]
         document.profiles.append(app)
         try store.save(document)
         check(try store.load() == document, "save/load round trip")
@@ -94,6 +97,7 @@ enum ProfileStoreTests {
                 groups[groupIndex] = group
             }
             profile["groups"] = groups
+            profile.removeValue(forKey: "contextRules")
             legacyProfiles[profileIndex] = profile
         }
         legacyJSON["profiles"] = legacyProfiles
@@ -102,7 +106,8 @@ enum ProfileStoreTests {
         let legacy = try store.importDocument(from: legacyURL)
         check(legacy.profiles.flatMap(\.groups).flatMap(\.controls).allSatisfy {
             $0.macroRetriggerPolicy == .queue && $0.queueLimit == 8 && $0.macroRepeatCount == 1
-        }, "legacy documents receive scheduling defaults")
+        } && legacy.profiles.allSatisfy { $0.contextRules.isEmpty },
+              "legacy documents receive scheduling and focus-rule defaults")
 
         var invalid = document
         invalid.schemaVersion = 99
@@ -150,6 +155,30 @@ enum ProfileStoreTests {
             Array(repeating: .keyTap(24, repeatCount: 100), count: 64)
         invalid.profiles[1].groups[3].controls[bindingIndex].macroRepeatCount = 2
         rejects("expanded macro over 10000 steps") { try store.validate(invalid) }
+        invalid = document
+        invalid.profiles[0].contextRules = app.contextRules
+        rejects("global focus rule") { try store.validate(invalid) }
+        invalid = document
+        invalid.profiles[1].contextRules[0].kind = nil
+        invalid.profiles[1].contextRules[0].role = nil
+        rejects("focus rule without criterion") { try store.validate(invalid) }
+        invalid = document
+        invalid.profiles[1].contextRules[0].targetGroupID = "missing"
+        rejects("focus rule missing target group") { try store.validate(invalid) }
+        invalid = document
+        invalid.profiles[1].contextRules.append(app.contextRules[0])
+        rejects("duplicate focus rule ID") { try store.validate(invalid) }
+        invalid = document
+        invalid.profiles[1].contextRules = (0...32).map {
+            FocusRule(id: "rule-\($0)", name: "Rule \($0)", targetGroupID: "group-1", kind: .text)
+        }
+        rejects("more than 32 focus rules") { try store.validate(invalid) }
+        invalid = document
+        invalid.profiles[1].contextRules[0].kind = .secure
+        rejects("secure focus rule") { try store.validate(invalid) }
+        invalid = document
+        invalid.profiles[1].contextRules[0].identifier = String(repeating: "x", count: 257)
+        rejects("oversized focus identifier") { try store.validate(invalid) }
 
         let futureJSON = String(data: originalData, encoding: .utf8)!.replacingOccurrences(
             of: "\"schemaVersion\" : 1", with: "\"schemaVersion\" : 99")
