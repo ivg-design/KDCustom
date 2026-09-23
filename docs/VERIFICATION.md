@@ -118,3 +118,9 @@ Build22 was signed/notarized/stapled, installed after a normal quit and preserve
 The user confirmed a manually typed value is applied by Tab and that Shift+Tab returns to the same field. Build24 implements that commit strategy, separate from the failed native-arrow and Enter/refocus strategies, and integrates the bounded panel/input diagnostic. Real dial acceptance is pending. Build23 was prepared/notarized but not installed, superseded by24 preparation.
 
 Build24 was installed, signed/notarized/stapled and accepted by Gatekeeper. All20 focused suites and native warnings-as-errors build passed. Installation preserved all14 profiles byte-for-byte, then only the four Group2 commitMethod values changed to tabReturn via revision-checked MCP; readback matched the intended full profile. Both dials retain the same independently editable rules. The in-memory panel/event diagnostic armed successfully through the installed19-tool MCP. Live slow numeric and fast-focus results remain pending.
+
+### Rive automatic apply stopped after build 26
+
+Build 26's physical retest also moved editing to another field. The bounded diagnostic recorded plain Tab followed by an unconfirmed intermediate field; no Shift+Tab was emitted. This establishes failure of the integrated return strategy, not rejection of a reverse key by Rive. The user chose to stop automatic-apply work for this profile. No subsequent experimental return change was installed.
+
+Through a fresh-revision MCP batch, removed the two typed numeric modifier rules from all four Group 2 dial bindings. Readback matched the complete intended Rive profile, and all other 13 profiles were unchanged. Both dials retain native plain/Command/Shift arrows; Control and Control+Shift are unassigned. Group 1 and other mappings are unchanged. Custom numeric input remains an opt-in feature for other apps. Fast native dial focus loss and automatic panel routing remain separate open issues.

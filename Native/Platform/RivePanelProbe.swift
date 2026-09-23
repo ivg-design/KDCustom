@@ -15,7 +15,7 @@ struct RivePointerSample: Sendable {
 final class RivePanelProbe {
     private let maxNodes = 160
     private let maxDiscoveryNodes = 48
-    private let discoveryDepth = 3
+    private let maxWrapperDepth = 6
     private let maxDepth = 8
     private let maxDuration: TimeInterval = 0.4
     private let perMessageTimeout: Float = 0.04
@@ -76,7 +76,8 @@ final class RivePanelProbe {
         var truncated = false
         // The native Flutter text editor can sit directly under AXWindow while
         // the editor's semantic panel groups are siblings. Collect the verified
-        // paths, then discover only the shallow window/Flutter/root containers.
+        // paths, then pass through only window-sized Flutter containers. Rive
+        // currently exposes several such wrappers before the pane siblings.
         let focusedID = appendPath(to: focused, window: window, deadline: deadline,
                                    elements: &elements, nodes: &nodes, truncated: &truncated)
         let hitID = appendPath(to: hit, window: window, deadline: deadline,
@@ -93,7 +94,17 @@ final class RivePanelProbe {
                     break
                 }
                 let (parentID, depth) = discovery.removeFirst()
-                guard depth < discoveryDepth, expanded.insert(parentID).inserted else { continue }
+                let node = nodes[parentID]
+                let windowSizedWrapper: Bool
+                if node.role == .group, let frame = node.frame,
+                   windowFrame.contains(frame), windowFrame.width > 0, windowFrame.height > 0 {
+                    let area = frame.width * frame.height
+                    windowSizedWrapper = area >= windowFrame.width * windowFrame.height * 0.8
+                } else {
+                    windowSizedWrapper = false
+                }
+                guard (depth == 0 || (depth < maxWrapperDepth && windowSizedWrapper)),
+                      expanded.insert(parentID).inserted else { continue }
                 let children = childElements(of: elements[parentID])
                 for child in children {
                     guard discovered < maxDiscoveryNodes, nodes.count < maxNodes,
