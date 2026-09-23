@@ -23,12 +23,21 @@ struct SmartDialEditor: View {
                     Text("Custom numeric · keyboard text").tag(NumericWriteMethod.keyboard)
                 }.font(StudioTheme.font(11))
                 if settings.writeMethod == .keyboard {
-                    Toggle("Apply immediately · Enter, then refocus the same field", isOn: $settings.commitWithEnter)
-                        .font(StudioTheme.font(11))
-                    Text(settings.commitWithEnter
-                        ? "Commits each numeric update and restores that field's focus. Stops if focus cannot be restored or you interact elsewhere."
-                        : "Reads the focused number and types the calculated value. Press Enter when finished if the app requires it. Non-numeric fields are left unchanged.")
-                        .font(StudioTheme.font(10)).foregroundStyle(StudioTheme.secondaryText)
+                    Picker("Apply changes", selection: $settings.commitMethod) {
+                        Text("Leave input open · apply manually").tag(NumericCommitMethod.manual)
+                        Text("Native arrow · keep editing").tag(NumericCommitMethod.nativeArrow)
+                        Text("Enter · restore focus").tag(NumericCommitMethod.enter)
+                    }.font(StudioTheme.font(11))
+                    if settings.commitMethod == .nativeArrow {
+                        HStack {
+                            Text("Native arrow step").font(StudioTheme.font(11))
+                            TextField("1", value: $settings.nativeArrowStep, format: .number.precision(.fractionLength(0...6)))
+                                .textFieldStyle(.roundedBorder).frame(width: 90)
+                            Text("Match one unmodified arrow press in this field.")
+                                .font(StudioTheme.font(10)).foregroundStyle(StudioTheme.secondaryText)
+                        }
+                    }
+                    Text(commitHelp).font(StudioTheme.font(10)).foregroundStyle(StudioTheme.secondaryText)
                 }
             }
             HStack {
@@ -83,6 +92,17 @@ struct SmartDialEditor: View {
                 Toggle("Use fallback actions for unsupported fields", isOn: $settings.fallbackToActions)
                     .font(StudioTheme.font(11)).padding(.top, 4)
             }
+        }
+    }
+
+    private var commitHelp: String {
+        switch settings.commitMethod {
+        case .manual:
+            return "Types the calculated value. Press Enter when finished if the app requires it."
+        case .nativeArrow:
+            return "Applies each numeric update through the app's arrow-key behavior and checks the final value. No Enter or refocusing."
+        case .enter:
+            return "Submits with Enter and tries to restore focus. Rive closes its input; use Native arrow there."
         }
     }
 

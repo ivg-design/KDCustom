@@ -14,6 +14,10 @@ enum NumericAdjustmentResult: Sendable {
 /// AX strings must contain a plain decimal only; units, expressions, grouping
 /// separators and exponents have app-specific meaning and are left untouched.
 enum NumericAdjustment {
+    struct ArrowCommitPlan: Equatable {
+        let draft: String
+        let keyCode: UInt16
+    }
     static let maximumMagnitude = 1_000_000_000_000.0
     static let maximumDelta = 1_000_000.0
     private static let decimalLocale = Locale(identifier: "en_US_POSIX")
@@ -27,6 +31,22 @@ enum NumericAdjustment {
         guard let a = plainDecimal(first.trimmingCharacters(in: .whitespacesAndNewlines)),
               let b = plainDecimal(second.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
         return a == b
+    }
+
+    /// Compensate for exactly one native arrow step. Both the draft and final
+    /// value must fit the known bounds; never silently clamp the draft.
+    static func arrowCommitPlan(target: String, step: Double,
+                                minimum: Double? = nil, maximum: Double? = nil) -> ArrowCommitPlan? {
+        guard step > 0, validDelta(step), equalValues(target, target) else { return nil }
+        for (offset, key): (Double, UInt16) in [(step, 125), (-step, 126)] {
+            guard let draft = adjustedString(target, delta: offset),
+                  let boundedDraft = adjustedString(target, delta: offset, minimum: minimum, maximum: maximum),
+                  equalValues(draft, boundedDraft),
+                  let final = adjustedString(draft, delta: -offset, minimum: minimum, maximum: maximum),
+                  equalValues(final, target) else { continue }
+            return ArrowCommitPlan(draft: draft, keyCode: key)
+        }
+        return nil
     }
 
     static func adjustedString(_ original: String, delta: Double,

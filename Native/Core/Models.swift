@@ -108,6 +108,12 @@ enum NumericWriteMethod: String, Codable, Sendable {
     case keyboard
 }
 
+enum NumericCommitMethod: String, Codable, Sendable {
+    case manual
+    case enter
+    case nativeArrow
+}
+
 struct SmartDialSettings: Codable, Equatable, Sendable {
     var direction: SmartDialDirection
     var detection: SmartDialDetection
@@ -116,7 +122,8 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
     var modifierRules: [SmartModifierRule]
     var fallbackToActions: Bool
     var writeMethod: NumericWriteMethod
-    var commitWithEnter: Bool
+    var commitMethod: NumericCommitMethod
+    var nativeArrowStep: Double
 
     init(direction: SmartDialDirection = .increase,
          detection: SmartDialDetection = .automatic,
@@ -128,7 +135,9 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
          ],
          fallbackToActions: Bool = false,
          writeMethod: NumericWriteMethod = .accessibility,
-         commitWithEnter: Bool = false) {
+         commitWithEnter: Bool = false,
+         commitMethod: NumericCommitMethod? = nil,
+         nativeArrowStep: Double = 1) {
         self.direction = direction
         self.detection = detection
         self.step = step
@@ -136,11 +145,13 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
         self.modifierRules = modifierRules
         self.fallbackToActions = fallbackToActions
         self.writeMethod = writeMethod
-        self.commitWithEnter = commitWithEnter
+        self.commitMethod = commitMethod ?? (commitWithEnter ? .enter : .manual)
+        self.nativeArrowStep = nativeArrowStep
     }
 
     private enum CodingKeys: String, CodingKey {
-        case direction, detection, step, shortcut, modifierRules, fallbackToActions, writeMethod, commitWithEnter
+        case direction, detection, step, shortcut, modifierRules, fallbackToActions, writeMethod
+        case commitMethod, nativeArrowStep, commitWithEnter
     }
     init(from decoder: Decoder) throws {
         let data = try decoder.container(keyedBy: CodingKeys.self)
@@ -152,7 +163,22 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
         modifierRules = try data.decodeIfPresent([SmartModifierRule].self, forKey: .modifierRules) ?? defaults.modifierRules
         fallbackToActions = try data.decodeIfPresent(Bool.self, forKey: .fallbackToActions) ?? defaults.fallbackToActions
         writeMethod = try data.decodeIfPresent(NumericWriteMethod.self, forKey: .writeMethod) ?? defaults.writeMethod
-        commitWithEnter = try data.decodeIfPresent(Bool.self, forKey: .commitWithEnter) ?? false
+        commitMethod = try data.decodeIfPresent(NumericCommitMethod.self, forKey: .commitMethod)
+            ?? ((try data.decodeIfPresent(Bool.self, forKey: .commitWithEnter) ?? false) ? .enter : .manual)
+        nativeArrowStep = try data.decodeIfPresent(Double.self, forKey: .nativeArrowStep) ?? 1
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var data = encoder.container(keyedBy: CodingKeys.self)
+        try data.encode(direction, forKey: .direction)
+        try data.encode(detection, forKey: .detection)
+        try data.encode(step, forKey: .step)
+        try data.encodeIfPresent(shortcut, forKey: .shortcut)
+        try data.encode(modifierRules, forKey: .modifierRules)
+        try data.encode(fallbackToActions, forKey: .fallbackToActions)
+        try data.encode(writeMethod, forKey: .writeMethod)
+        try data.encode(commitMethod, forKey: .commitMethod)
+        try data.encode(nativeArrowStep, forKey: .nativeArrowStep)
     }
 
     /// Unsupported combinations are deliberately inert; they never degrade to

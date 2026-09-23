@@ -76,7 +76,7 @@ final class FocusedInputObserver {
 
     func adjustNumeric(token: String, delta: Double, allowTextField: Bool,
                        writeMethod: NumericWriteMethod = .accessibility,
-                       commitWithEnter: Bool = false,
+                       commitMethod: NumericCommitMethod = .manual, nativeArrowStep: Double = 1,
                        completion: @escaping @MainActor (NumericAdjustmentResult) -> Void) {
         guard enabled, snapshot.token == token,
               snapshot.kind != .unavailable, snapshot.kind != .secure else {
@@ -85,14 +85,15 @@ final class FocusedInputObserver {
         guard snapshot.kind == .numeric || (snapshot.kind == .text && allowTextField) else {
             completion(.unsupported); return
         }
-        guard NumericAdjustment.validDelta(delta) else { completion(.failed); return }
+        guard NumericAdjustment.validDelta(delta), nativeArrowStep > 0,
+              NumericAdjustment.validDelta(nativeArrowStep) else { completion(.failed); return }
         guard let ticket = numericLease.reserve(generation: generation, epoch: focusEpoch,
                                                 token: token) else {
             completion(.cancelled); return
         }
-        let deadline = ProcessInfo.processInfo.systemUptime + (commitWithEnter ? 0.9 : 0.5)
+        let deadline = ProcessInfo.processInfo.systemUptime + (commitMethod == .enter ? 0.9 : 0.5)
         worker.adjustNumeric(ticket: ticket, delta: delta, writeMethod: writeMethod,
-                             commitWithEnter: commitWithEnter, deadline: deadline,
+                             commitMethod: commitMethod, nativeArrowStep: nativeArrowStep, deadline: deadline,
                              completion: completion)
     }
 
@@ -191,7 +192,7 @@ private final class FocusAXWorker: @unchecked Sendable {
     }
 
     func adjustNumeric(ticket: NumericAdjustmentLease.Ticket, delta: Double, writeMethod: NumericWriteMethod,
-                       commitWithEnter: Bool,
+                       commitMethod: NumericCommitMethod, nativeArrowStep: Double,
                        deadline: TimeInterval,
                        completion: @escaping @MainActor (NumericAdjustmentResult) -> Void) {
         queue.async { [self] in
@@ -202,7 +203,7 @@ private final class FocusAXWorker: @unchecked Sendable {
             else {
                 result = onAXThread(for: observedPID) {
                     performNumericAdjustment(ticket: ticket, delta: delta, writeMethod: writeMethod,
-                                             commitWithEnter: commitWithEnter, deadline: deadline)
+                                             commitMethod: commitMethod, nativeArrowStep: nativeArrowStep, deadline: deadline)
                 }
             }
             numericLease.finish()
@@ -219,7 +220,7 @@ private final class FocusAXWorker: @unchecked Sendable {
     }
 
     private func performNumericAdjustment(ticket: NumericAdjustmentLease.Ticket, delta: Double, writeMethod: NumericWriteMethod,
-                                          commitWithEnter: Bool,
+                                          commitMethod: NumericCommitMethod, nativeArrowStep: Double,
                                           deadline: TimeInterval) -> NumericAdjustmentResult {
         guard numericLease.isCurrent(ticket),
               ProcessInfo.processInfo.systemUptime <= deadline,
@@ -271,6 +272,12 @@ private final class FocusAXWorker: @unchecked Sendable {
         if writeMethod == .keyboard {
             guard let original = rawValue as? String, let text = replacement as? String,
                   let keyboardOutput else { return .unsupported }
+            let arrowPlan: NumericAdjustment.ArrowCommitPlan?
+            if commitMethod == .nativeArrow {
+                guard let plan = NumericAdjustment.arrowCommitPlan(target: text, step: nativeArrowStep,
+                    minimum: minimum, maximum: maximum) else { return .unsupported }
+                arrowPlan = plan
+            } else { arrowPlan = nil }
             // Readable focused numeric text is required before Select All.
             // Recheck the value after selecting, in case the user edited it.
             let selected = DispatchQueue.main.sync {
@@ -283,7 +290,8 @@ private final class FocusAXWorker: @unchecked Sendable {
                   let current = stringAttribute(kAXValueAttribute as CFString, from: focused),
                   NumericAdjustment.equalValues(original, current) else { return .cancelled }
             let sent = DispatchQueue.main.sync {
-                numericLease.isCurrent(ticket) && keyboardOutput.numericText(text)
+                numericLease.isCurrent(ticket) && keyboardOutput.numericText(arrowPlan?.draft ?? text,
+                                                                             commitKeyCode: arrowPlan?.keyCode)
             }
             guard sent else { return .failed }
             Thread.sleep(forTimeInterval: 0.08)
@@ -291,7 +299,7 @@ private final class FocusAXWorker: @unchecked Sendable {
                   hasExpectedFocus(focused, app: app, pid: pid, deadline: deadline) else { return .cancelled }
             guard let actual = stringAttribute(kAXValueAttribute as CFString, from: focused),
                   NumericAdjustment.equalValues(actual, text) else { return .failed }
-            if commitWithEnter {
+            if commitMethod == .enter {
                 return commitAndRestore(focused, app: app, pid: pid, ticket: ticket,
                                         text: text, output: keyboardOutput, deadline: deadline)
             }

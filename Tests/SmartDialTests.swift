@@ -120,9 +120,23 @@ enum SmartDialTests {
         let partial = try JSONDecoder().decode(SmartDialSettings.self, from: Data("{}".utf8))
         check(partial == defaults, "Omitted Smart settings fields decode to defaults")
         check(partial.writeMethod == .accessibility, "Existing profiles never start typing into fields after upgrade")
-        check(!partial.commitWithEnter, "Existing numeric profiles keep explicit commit behavior")
+        check(partial.commitMethod == .manual && partial.nativeArrowStep == 1,
+              "Existing numeric profiles keep explicit commit behavior")
+        let oldEnter = try JSONDecoder().decode(SmartDialSettings.self, from: Data(#"{"commitWithEnter":true}"#.utf8))
+        check(oldEnter.commitMethod == .enter, "Build 20 Enter settings decode without silently changing behavior")
+        var arrowSettings = defaults
+        arrowSettings.writeMethod = .keyboard; arrowSettings.commitMethod = .nativeArrow
+        arrowSettings.nativeArrowStep = 0.1
+        let arrowData = try JSONEncoder().encode(arrowSettings)
+        check(try JSONDecoder().decode(SmartDialSettings.self, from: arrowData) == arrowSettings,
+              "Native commit strategy and app-specific arrow magnitude round-trip")
+        let arrowObject = try JSONSerialization.jsonObject(with: arrowData) as! [String: Any]
+        check(arrowObject["commitWithEnter"] == nil && arrowObject["commitMethod"] as? String == "nativeArrow",
+              "New settings encode one unambiguous commit method")
+        rejectsProfile("invalid native arrow magnitude") { $0.smart!.nativeArrowStep = 0 }
         var typed = custom
         typed.writeMethod = .keyboard; typed.fallbackToActions = false
+        typed.commitMethod = .nativeArrow; typed.nativeArrowStep = 0.1
         let typedData = try JSONEncoder().encode(typed)
         check(try JSONDecoder().decode(SmartDialSettings.self, from: typedData) == typed,
               "Explicit keyboard numeric strategy round-trips")
@@ -132,6 +146,14 @@ enum SmartDialTests {
         try MCPTools.validate(name: "kdcustom_set_binding", arguments: [
             "expectedRevision": "r1", "profileId": "global", "groupId": "group-1", "binding": typedObject
         ])
+        for (key, badValue): (String, Any) in [("commitWithEnter", true), ("commitMethod", "unknown"),
+                                               ("nativeArrowStep", "1"), ("nativeArrowStep", 0),
+                                               ("nativeArrowStep", 1_000_001)] {
+            var malformed = typedObject
+            var settings = malformed["smart"] as! [String: Any]
+            settings[key] = badValue; malformed["smart"] = settings
+            rejectsMCP("invalid or conflicting commit settings: \(key)", malformed)
+        }
         rejectsProfile("keyboard replacement cannot fall through into macros") {
             $0.smart!.writeMethod = .keyboard; $0.smart!.fallbackToActions = true
         }

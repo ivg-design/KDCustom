@@ -251,9 +251,12 @@ enum MCPTools {
     }
 
     private static func validateSmart(_ object: [String: Any]) throws {
-        let allowed: Set<String> = ["direction", "detection", "step", "shortcut", "modifierRules", "fallbackToActions", "writeMethod", "commitWithEnter"]
+        let allowed: Set<String> = ["direction", "detection", "step", "shortcut", "modifierRules", "fallbackToActions", "writeMethod", "commitWithEnter", "commitMethod", "nativeArrowStep"]
         guard Set(object.keys).isSubset(of: allowed) else {
             throw MCPInputError(reason: "smart contains an unexpected field")
+        }
+        guard object["commitMethod"] == nil || object["commitWithEnter"] == nil else {
+            throw MCPInputError(reason: "Use commitMethod or legacy commitWithEnter, not both")
         }
         if let shortcut = object["shortcut"] {
             try validateSmartShortcut(shortcut)
@@ -364,6 +367,8 @@ enum MCPTools {
         "detection": ["type": "string", "enum": ["automatic", "numericField"]],
         "writeMethod": ["type": "string", "enum": ["accessibility", "keyboard"]],
         "commitWithEnter": ["type": "boolean", "default": false],
+        "commitMethod": ["type": "string", "enum": ["manual", "enter", "nativeArrow"]],
+        "nativeArrowStep": ["type": "number", "minimum": 0.000001, "maximum": 1_000_000],
         "step": ["type": "number", "minimum": 0.000001, "maximum": 1_000_000],
         "shortcut": smartShortcutSchema,
         "modifierRules": ["type": "array", "maxItems": 8, "items": smartModifierRuleSchema],

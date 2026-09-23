@@ -168,10 +168,16 @@ final class SystemActionOutput: ActionOutput {
 
     /// Numeric Smart selectors are not part of the text being inserted.
     /// This uses the same HID text path as ordinary text macros.
-    func numericText(_ value: String) -> Bool {
+    func numericText(_ value: String, commitKeyCode: UInt16? = nil) -> Bool {
         guard value.utf8.count <= 64, NumericAdjustment.equalValues(value, value),
               !physicalKeyIsDown(0) else { return false }
-        return postText(value, flags: physicalFlags.intersection(.maskAlphaShift))
+        if let commitKeyCode {
+            guard [125, 126].contains(commitKeyCode), !physicalKeyIsDown(commitKeyCode) else { return false }
+        }
+        guard postText(value, flags: physicalFlags.intersection(.maskAlphaShift)) else { return false }
+        // Queue the compensating arrow immediately after the text; avoid
+        // leaving an offset draft waiting through an additional timer.
+        return commitKeyCode.map { smartShortcut(SmartShortcut(keyCode: $0)) } ?? true
     }
 
     private func postText(_ value: String, flags: CGEventFlags) -> Bool {

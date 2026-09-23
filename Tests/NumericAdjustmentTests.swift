@@ -51,6 +51,32 @@ enum NumericAdjustmentTests {
               "scientific notation in external AX field strings stays unsupported")
         check(NumericAdjustment.adjustedString(String(repeating: "9", count: 19), delta: 1) == nil,
               "high precision or magnitude input is rejected")
+        check(NumericAdjustment.arrowCommitPlan(target: "0.02", step: 1) ==
+              .init(draft: "1.02", keyCode: 125), "Down commits a compensated hundredth draft")
+        check(NumericAdjustment.arrowCommitPlan(target: "-1.001", step: 0.1) ==
+              .init(draft: "-0.901", keyCode: 125), "negative fine values compensate exactly")
+        check(NumericAdjustment.arrowCommitPlan(target: "10", step: 1, minimum: 0, maximum: 10) ==
+              .init(draft: "9", keyCode: 126), "near maximum use Up without clamping the draft")
+        check(NumericAdjustment.arrowCommitPlan(target: "0", step: 1, minimum: 0, maximum: 10) ==
+              .init(draft: "1", keyCode: 125), "near minimum Down remains valid")
+        check(NumericAdjustment.arrowCommitPlan(target: "0.5", step: 1, minimum: 0, maximum: 1) == nil,
+              "a range too narrow for compensation is rejected before typing")
+        for badStep in [0.0, -1, .nan, .infinity, 1_000_001] {
+            check(NumericAdjustment.arrowCommitPlan(target: "1", step: badStep) == nil,
+                  "invalid native step is rejected")
+        }
+        check(NumericAdjustment.arrowCommitPlan(target: "1 px", step: 1) == nil &&
+              NumericAdjustment.arrowCommitPlan(target: "1", step: 1, minimum: 2, maximum: 1) == nil &&
+              NumericAdjustment.arrowCommitPlan(target: "1", step: 1, maximum: .nan) == nil,
+              "ambiguous target and invalid bounds never produce a plan")
+        var committed = "0"
+        for delta in Array(repeating: 0.01, count: 100) + Array(repeating: -0.01, count: 100) {
+            let target = NumericAdjustment.adjustedString(committed, delta: delta)!
+            let plan = NumericAdjustment.arrowCommitPlan(target: target, step: 1)!
+            committed = NumericAdjustment.adjustedString(plan.draft, delta: plan.keyCode == 125 ? -1 : 1)!
+            check(NumericAdjustment.equalValues(committed, target), "native arrow produces the exact target")
+        }
+        check(committed == "0", "repeated compensated hundredths do not accumulate drift")
         print("NumericAdjustmentTests passed")
     }
 }

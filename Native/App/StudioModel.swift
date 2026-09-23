@@ -67,7 +67,8 @@ final class StudioModel: ObservableObject {
         let profile: String
         let pid: pid_t?
         let allowText: Bool
-        let commitWithEnter: Bool
+        let commitMethod: NumericCommitMethod
+        let nativeArrowStep: Double
     }
     private var typedNumericContext: TypedNumericContext?
     private var typedNumericJob: UUID?
@@ -314,7 +315,7 @@ final class StudioModel: ObservableObject {
         if settings.writeMethod == .keyboard {
             let context = TypedNumericContext(token: focus.token, revision: expectedRevision,
                 profile: expectedProfile, pid: expectedPID, allowText: allowText,
-                commitWithEnter: settings.commitWithEnter)
+                commitMethod: settings.commitMethod, nativeArrowStep: settings.nativeArrowStep)
             if typedNumericContext != context {
                 cancelNumericWork(); typedNumericContext = context
             }
@@ -353,7 +354,7 @@ final class StudioModel: ObservableObject {
         let job = UUID(); typedNumericJob = job
         focusObserver.adjustNumeric(token: context.token, delta: batch.delta,
             allowTextField: context.allowText, writeMethod: .keyboard,
-            commitWithEnter: context.commitWithEnter) { [weak self] result in
+            commitMethod: context.commitMethod, nativeArrowStep: context.nativeArrowStep) { [weak self] result in
             guard let self, self.typedNumericJob == job else { return }
             self.reconcileForeground()
             guard self.output.enabled, self.typedNumericContext == context,

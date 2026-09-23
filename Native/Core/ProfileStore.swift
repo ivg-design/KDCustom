@@ -199,6 +199,9 @@ struct ProfileStore {
         guard validSmartStep(smart.step) else {
             throw invalid("smart step must be finite and 0.000001...1000000 in \(control.rawValue)")
         }
+        guard validSmartStep(smart.nativeArrowStep) else {
+            throw invalid("native arrow step must be finite and 0.000001...1000000 in \(control.rawValue)")
+        }
         if let shortcut = smart.shortcut { try validate(shortcut, for: control) }
         guard smart.modifierRules.count <= 8 else {
             throw invalid("smart dial has more than eight modifier rules in \(control.rawValue)")
