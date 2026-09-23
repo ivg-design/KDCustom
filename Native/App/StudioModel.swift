@@ -61,6 +61,16 @@ final class StudioModel: ObservableObject {
     private var deviceStarted = false
     private var lastForegroundPID: pid_t?
     private var queuedGroupChange: (profile: String, revision: String, offset: Int)?
+    private struct TypedNumericContext: Equatable {
+        let token: String
+        let revision: String
+        let profile: String
+        let pid: pid_t?
+        let allowText: Bool
+    }
+    private var typedNumericContext: TypedNumericContext?
+    private var typedNumericJob: UUID?
+    private var typedNumericSteps = NumericStepBuffer()
 
     init() throws {
         configuration = try ConfigurationService()
@@ -83,6 +93,8 @@ final class StudioModel: ObservableObject {
         engine.onGroupChange = { [weak self] offset in self?.queueGroupChange(offset) }
         engine.onEvent = { [weak self] in self?.record($0) }
         output.onObservationLost = { [weak self] in self?.cancelActions(reason: "Input observer interrupted") }
+        output.onPhysicalEditingInput = { [weak self] in self?.cancelNumericWork() }
+        focusObserver.setKeyboardOutput(output)
         device.onControl = { [weak self] control, down in self?.input(control, down: down) }
         device.onStatus = { [weak self] in self?.record($0) }
         device.onConnectionChange = { [weak self] state, transport in
@@ -241,8 +253,14 @@ final class StudioModel: ObservableObject {
         onStatusChange?()
     }
     private func cancelActions(reason: String) {
-        focusObserver.cancelNumericAdjustments()
+        cancelNumericWork()
         engine.cancelAll(reason: reason)
+    }
+    private func cancelNumericWork() {
+        typedNumericSteps.removeAll()
+        typedNumericContext = nil
+        typedNumericJob = nil
+        focusObserver.cancelNumericAdjustments()
     }
     func recoverDiagnosticKeyState() { output.seedPhysicalState() }
     private func input(_ control: ControlID, down: Bool) {
@@ -258,6 +276,7 @@ final class StudioModel: ObservableObject {
             if down { smartDial(binding) }
             return
         }
+        cancelNumericWork()
         engine.handle(control: control, isDown: down, binding: binding, now: ProcessInfo.processInfo.systemUptime)
     }
     private func smartDial(_ binding: ControlBinding) {
@@ -265,11 +284,12 @@ final class StudioModel: ObservableObject {
         let modifiers = output.physicalModifiers
         guard let settings = binding.smart,
               let choice = settings.selection(for: modifiers) else {
-            focusObserver.cancelNumericAdjustments()
+            cancelNumericWork()
             recordDialDecision(binding.controlID, modifiers: modifiers, shortcut: nil, result: "No matching modifier rule")
             return
         }
         if let shortcut = choice.shortcut {
+            cancelNumericWork()
             let sent = output.smartShortcut(shortcut)
             recordDialDecision(binding.controlID, modifiers: modifiers, shortcut: shortcut,
                                result: sent ? "Shortcut sent" : "Shortcut unavailable")
@@ -290,6 +310,19 @@ final class StudioModel: ObservableObject {
         let expectedPID = lastForegroundPID
         let delta = settings.direction == .increase ? choice.step : -choice.step
         let allowText = SmartDialHeuristics.allowsTextField(focus, detection: settings.detection)
+        if settings.writeMethod == .keyboard {
+            let context = TypedNumericContext(token: focus.token, revision: expectedRevision,
+                profile: expectedProfile, pid: expectedPID, allowText: allowText)
+            if typedNumericContext != context {
+                cancelNumericWork(); typedNumericContext = context
+            }
+            guard typedNumericSteps.append(delta) else {
+                record("Smart · numeric queue full; step not accepted"); return
+            }
+            drainTypedNumeric()
+            return
+        }
+        if typedNumericContext != nil { cancelNumericWork() }
         focusObserver.adjustNumeric(token: focus.token, delta: delta, allowTextField: allowText) { [weak self] result in
             guard let self else { return }
             self.reconcileForeground()
@@ -308,6 +341,32 @@ final class StudioModel: ObservableObject {
                 } else { self.record("Smart · field unavailable; no action") }
             case .cancelled: break
             case .failed: self.record("Smart · app did not confirm adjustment; no fallback sent")
+            }
+        }
+    }
+    private func drainTypedNumeric() {
+        guard typedNumericJob == nil, let context = typedNumericContext,
+              let batch = typedNumericSteps.take() else { return }
+        let job = UUID(); typedNumericJob = job
+        focusObserver.adjustNumeric(token: context.token, delta: batch.delta,
+            allowTextField: context.allowText, writeMethod: .keyboard) { [weak self] result in
+            guard let self, self.typedNumericJob == job else { return }
+            self.reconcileForeground()
+            guard self.output.enabled, self.typedNumericContext == context,
+                  self.revision == context.revision, self.effectiveProfile.id == context.profile,
+                  self.lastForegroundPID == context.pid, self.focusedInput.token == context.token else {
+                self.cancelNumericWork(); return
+            }
+            self.typedNumericJob = nil
+            switch result {
+            case .applied:
+                self.record("Smart · numeric text updated (\(batch.detents) detents)")
+                self.drainTypedNumeric()
+            case .unsupported:
+                self.cancelNumericWork(); self.record("Smart · readable numeric text field required")
+            case .failed:
+                self.cancelNumericWork(); self.record("Smart · text replacement not confirmed; stopped")
+            case .cancelled: self.cancelNumericWork()
             }
         }
     }

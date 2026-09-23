@@ -251,7 +251,7 @@ enum MCPTools {
     }
 
     private static func validateSmart(_ object: [String: Any]) throws {
-        let allowed: Set<String> = ["direction", "detection", "step", "shortcut", "modifierRules", "fallbackToActions"]
+        let allowed: Set<String> = ["direction", "detection", "step", "shortcut", "modifierRules", "fallbackToActions", "writeMethod"]
         guard Set(object.keys).isSubset(of: allowed) else {
             throw MCPInputError(reason: "smart contains an unexpected field")
         }
@@ -361,6 +361,7 @@ enum MCPTools {
     private static let smartSchema = object([
         "direction": ["type": "string", "enum": ["increase", "decrease"]],
         "detection": ["type": "string", "enum": ["automatic", "numericField"]],
+        "writeMethod": ["type": "string", "enum": ["accessibility", "keyboard"]],
         "step": ["type": "number", "minimum": 0.000001, "maximum": 1_000_000],
         "shortcut": smartShortcutSchema,
         "modifierRules": ["type": "array", "maxItems": 8, "items": smartModifierRuleSchema],

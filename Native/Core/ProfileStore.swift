@@ -193,6 +193,9 @@ struct ProfileStore {
     }
 
     private func validate(_ smart: SmartDialSettings, for control: ControlID) throws {
+        guard smart.writeMethod != .keyboard || !smart.fallbackToActions else {
+            throw ProfileStoreError.invalid("Keyboard numeric input cannot use fallback actions")
+        }
         guard validSmartStep(smart.step) else {
             throw invalid("smart step must be finite and 0.000001...1000000 in \(control.rawValue)")
         }

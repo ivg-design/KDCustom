@@ -71,7 +71,10 @@ final class FocusedInputObserver {
         numericLease.cancelPending()
     }
 
+    func setKeyboardOutput(_ output: SystemActionOutput) { worker.setKeyboardOutput(output) }
+
     func adjustNumeric(token: String, delta: Double, allowTextField: Bool,
+                       writeMethod: NumericWriteMethod = .accessibility,
                        completion: @escaping @MainActor (NumericAdjustmentResult) -> Void) {
         guard enabled, snapshot.token == token,
               snapshot.kind != .unavailable, snapshot.kind != .secure else {
@@ -86,7 +89,7 @@ final class FocusedInputObserver {
             completion(.cancelled); return
         }
         let deadline = ProcessInfo.processInfo.systemUptime + 0.5
-        worker.adjustNumeric(ticket: ticket, delta: delta, deadline: deadline,
+        worker.adjustNumeric(ticket: ticket, delta: delta, writeMethod: writeMethod, deadline: deadline,
                              completion: completion)
     }
 
@@ -194,9 +197,14 @@ private final class FocusAXWorker: @unchecked Sendable {
     private var epoch: UInt64 = 0
     private var lastElement: AXUIElement?
     private var lastSnapshot: FocusSnapshot?
+    private weak var keyboardOutput: SystemActionOutput?
 
     init(lease: NumericAdjustmentLease) {
         numericLease = lease
+    }
+
+    func setKeyboardOutput(_ output: SystemActionOutput) {
+        queue.async { [self] in keyboardOutput = output }
     }
 
     func configure(pid: pid_t?, bundleIdentifier: String?, generation: UInt64,
@@ -238,12 +246,18 @@ private final class FocusAXWorker: @unchecked Sendable {
         }
     }
 
-    func adjustNumeric(ticket: NumericAdjustmentLease.Ticket, delta: Double,
+    func adjustNumeric(ticket: NumericAdjustmentLease.Ticket, delta: Double, writeMethod: NumericWriteMethod,
                        deadline: TimeInterval,
                        completion: @escaping @MainActor (NumericAdjustmentResult) -> Void) {
         queue.async { [self] in
-            let result = onAXThread(for: observedPID) {
-                performNumericAdjustment(ticket: ticket, delta: delta, deadline: deadline)
+            let result: NumericAdjustmentResult
+            // Keyboard replacement is for external applications. Never block
+            // AppKit's own AX/main queue while waiting for injected events.
+            if writeMethod == .keyboard && observedPID == getpid() { result = .unsupported }
+            else {
+                result = onAXThread(for: observedPID) {
+                    performNumericAdjustment(ticket: ticket, delta: delta, writeMethod: writeMethod, deadline: deadline)
+                }
             }
             numericLease.finish()
             Task { @MainActor in completion(result) }
@@ -258,7 +272,7 @@ private final class FocusAXWorker: @unchecked Sendable {
         return DispatchQueue.main.sync(execute: operation)
     }
 
-    private func performNumericAdjustment(ticket: NumericAdjustmentLease.Ticket, delta: Double,
+    private func performNumericAdjustment(ticket: NumericAdjustmentLease.Ticket, delta: Double, writeMethod: NumericWriteMethod,
                                           deadline: TimeInterval) -> NumericAdjustmentResult {
         guard numericLease.isCurrent(ticket),
               ProcessInfo.processInfo.systemUptime <= deadline,
@@ -268,9 +282,13 @@ private final class FocusAXWorker: @unchecked Sendable {
 
         AXUIElementSetMessagingTimeout(focused, 0.12)
         guard hasExpectedFocus(focused, app: app, pid: pid, deadline: deadline) else { return .cancelled }
-        var settable: DarwinBoolean = false
-        guard AXUIElementIsAttributeSettable(focused, kAXValueAttribute as CFString, &settable) == .success,
-              settable.boolValue else { return .unsupported }
+        if writeMethod == .accessibility {
+            var settable: DarwinBoolean = false
+            guard AXUIElementIsAttributeSettable(focused, kAXValueAttribute as CFString, &settable) == .success,
+                  settable.boolValue else { return .unsupported }
+        } else {
+            guard lastSnapshot?.kind == .text else { return .unsupported }
+        }
         guard numericLease.isCurrent(ticket), ProcessInfo.processInfo.systemUptime <= deadline else {
             return .cancelled
         }
@@ -303,6 +321,31 @@ private final class FocusAXWorker: @unchecked Sendable {
               hasExpectedFocus(focused, app: app, pid: pid, deadline: deadline),
               numericLease.isCurrent(ticket),
               ProcessInfo.processInfo.systemUptime <= deadline else { return .cancelled }
+        if writeMethod == .keyboard {
+            guard let original = rawValue as? String, let text = replacement as? String,
+                  let keyboardOutput else { return .unsupported }
+            // Readable focused numeric text is required before Select All.
+            // Recheck the value after selecting, in case the user edited it.
+            let selected = DispatchQueue.main.sync {
+                numericLease.isCurrent(ticket) && keyboardOutput.smartShortcut(SmartShortcut(keyCode: 0, modifiers: .command))
+            }
+            guard selected else { return .failed }
+            Thread.sleep(forTimeInterval: 0.06)
+            guard numericLease.isCurrent(ticket),
+                  hasExpectedFocus(focused, app: app, pid: pid, deadline: deadline),
+                  let current = stringAttribute(kAXValueAttribute as CFString, from: focused),
+                  NumericAdjustment.equalValues(original, current) else { return .cancelled }
+            let sent = DispatchQueue.main.sync {
+                numericLease.isCurrent(ticket) && keyboardOutput.numericText(text)
+            }
+            guard sent else { return .failed }
+            Thread.sleep(forTimeInterval: 0.08)
+            guard numericLease.isCurrent(ticket),
+                  hasExpectedFocus(focused, app: app, pid: pid, deadline: deadline) else { return .cancelled }
+            guard let actual = stringAttribute(kAXValueAttribute as CFString, from: focused),
+                  NumericAdjustment.equalValues(actual, text) else { return .failed }
+            return .applied
+        }
         let status = AXUIElementSetAttributeValue(focused, kAXValueAttribute as CFString,
                                                   replacement)
         return status == .success ? .applied : .failed

@@ -88,6 +88,11 @@ struct SmartDialSelection: Equatable, Sendable {
     var shortcut: SmartShortcut?
 }
 
+enum NumericWriteMethod: String, Codable, Sendable {
+    case accessibility
+    case keyboard
+}
+
 struct SmartDialSettings: Codable, Equatable, Sendable {
     var direction: SmartDialDirection
     var detection: SmartDialDetection
@@ -95,6 +100,7 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
     var shortcut: SmartShortcut?
     var modifierRules: [SmartModifierRule]
     var fallbackToActions: Bool
+    var writeMethod: NumericWriteMethod
 
     init(direction: SmartDialDirection = .increase,
          detection: SmartDialDetection = .automatic,
@@ -104,17 +110,19 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
             .init(id: "option", name: "Fine", modifiers: .option, step: 0.01),
             .init(id: "shift", name: "Coarse", modifiers: .shift, step: 10)
          ],
-         fallbackToActions: Bool = false) {
+         fallbackToActions: Bool = false,
+         writeMethod: NumericWriteMethod = .accessibility) {
         self.direction = direction
         self.detection = detection
         self.step = step
         self.shortcut = shortcut
         self.modifierRules = modifierRules
         self.fallbackToActions = fallbackToActions
+        self.writeMethod = writeMethod
     }
 
     private enum CodingKeys: String, CodingKey {
-        case direction, detection, step, shortcut, modifierRules, fallbackToActions
+        case direction, detection, step, shortcut, modifierRules, fallbackToActions, writeMethod
     }
     init(from decoder: Decoder) throws {
         let data = try decoder.container(keyedBy: CodingKeys.self)
@@ -125,6 +133,7 @@ struct SmartDialSettings: Codable, Equatable, Sendable {
         shortcut = try data.decodeIfPresent(SmartShortcut.self, forKey: .shortcut)
         modifierRules = try data.decodeIfPresent([SmartModifierRule].self, forKey: .modifierRules) ?? defaults.modifierRules
         fallbackToActions = try data.decodeIfPresent(Bool.self, forKey: .fallbackToActions) ?? defaults.fallbackToActions
+        writeMethod = try data.decodeIfPresent(NumericWriteMethod.self, forKey: .writeMethod) ?? defaults.writeMethod
     }
 
     /// Unsupported combinations are deliberately inert; they never degrade to

@@ -82,6 +82,21 @@ enum SmartDialTests {
               "Legacy binding decodes without Smart settings")
         let partial = try JSONDecoder().decode(SmartDialSettings.self, from: Data("{}".utf8))
         check(partial == defaults, "Omitted Smart settings fields decode to defaults")
+        check(partial.writeMethod == .accessibility, "Existing profiles never start typing into fields after upgrade")
+        var typed = custom
+        typed.writeMethod = .keyboard; typed.fallbackToActions = false
+        let typedData = try JSONEncoder().encode(typed)
+        check(try JSONDecoder().decode(SmartDialSettings.self, from: typedData) == typed,
+              "Explicit keyboard numeric strategy round-trips")
+        var typedBinding = document.profiles[0].groups[0].controls[dialIndex]
+        typedBinding.smart = typed
+        let typedObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(typedBinding)) as! [String: Any]
+        try MCPTools.validate(name: "kdcustom_set_binding", arguments: [
+            "expectedRevision": "r1", "profileId": "global", "groupId": "group-1", "binding": typedObject
+        ])
+        rejectsProfile("keyboard replacement cannot fall through into macros") {
+            $0.smart!.writeMethod = .keyboard; $0.smart!.fallbackToActions = true
+        }
 
         rejectsProfile("missing settings") { $0.smart = nil }
         var buttonDocument = KeydialDocument()

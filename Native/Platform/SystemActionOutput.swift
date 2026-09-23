@@ -18,13 +18,14 @@ final class SystemActionOutput: ActionOutput {
     /// Production output may begin only while its selected foreground process is still active.
     var expectedForegroundPID: pid_t?
     var onObservationLost: (() -> Void)?
+    var onPhysicalEditingInput: (() -> Void)?
     var onOutput: ((String) -> Void)?
 
     func startObserving() {
         guard tap == nil else { return }
         let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged,
                                    .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
-                                   .otherMouseDown, .otherMouseUp]
+                                   .otherMouseDown, .otherMouseUp, .scrollWheel]
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         let context = Unmanaged.passUnretained(self).toOpaque()
         tap = CGEvent.tapCreate(tap: .cghidEventTap, place: .headInsertEventTap,
@@ -41,6 +42,9 @@ final class SystemActionOutput: ActionOutput {
                     owner.seedPhysicalState()
                     owner.observing = true
                 } else if event.getIntegerValueField(.eventSourceUserData) != SystemActionOutput.eventMarker {
+                    if [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel].contains(type) {
+                        owner.onPhysicalEditingInput?()
+                    }
                     let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
                     if type == .keyDown { owner.physical.key(code, down: true, posted: false) }
                     if type == .keyUp { owner.physical.key(code, down: false, posted: false) }
@@ -159,13 +163,26 @@ final class SystemActionOutput: ActionOutput {
         return post(event, summary: "Key \(code) \(down ? "down" : "up")", release: !down)
     }
     func text(_ value: String) {
+        _ = postText(value, flags: physicalFlags)
+    }
+
+    /// Numeric Smart selectors are not part of the text being inserted.
+    /// This uses the same HID text path as ordinary text macros.
+    func numericText(_ value: String) -> Bool {
+        guard value.utf8.count <= 64, NumericAdjustment.equalValues(value, value),
+              !physicalKeyIsDown(0) else { return false }
+        return postText(value, flags: physicalFlags.intersection(.maskAlphaShift))
+    }
+
+    private func postText(_ value: String, flags: CGEventFlags) -> Bool {
         let units = Array(value.utf16)
         for down in [true, false] {
             let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
             units.withUnsafeBufferPointer { event?.keyboardSetUnicodeString(stringLength: units.count, unicodeString: $0.baseAddress) }
-            event?.flags = physicalFlags
-            if !post(event, summary: "Text \(down ? "down" : "up")", release: !down), down { return }
+            event?.flags = flags
+            if !post(event, summary: "Text \(down ? "down" : "up")", release: !down) { return false }
         }
+        return true
     }
     @discardableResult
     func mouse(button: MouseButton, down: Bool, modifiers: KeyModifiers) -> Bool {

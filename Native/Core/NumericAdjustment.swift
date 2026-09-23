@@ -22,6 +22,12 @@ enum NumericAdjustment {
             trustedDecimal(delta) != nil
     }
 
+    static func equalValues(_ first: String, _ second: String) -> Bool {
+        guard let a = plainDecimal(first.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let b = plainDecimal(second.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+        return a == b
+    }
+
     static func adjustedString(_ original: String, delta: Double,
                                minimum: Double? = nil, maximum: Double? = nil) -> String? {
         let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)

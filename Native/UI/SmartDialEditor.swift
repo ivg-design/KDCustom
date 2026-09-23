@@ -15,6 +15,17 @@ struct SmartDialEditor: View {
                     HStack(spacing: 18) { numericOptions }
                     VStack(alignment: .leading, spacing: 8) { numericOptions }
                 }.padding(.bottom, 5)
+                Picker("Write value using", selection: Binding(get: { settings.writeMethod }, set: {
+                    settings.writeMethod = $0
+                    if $0 == .keyboard { settings.fallbackToActions = false }
+                })) {
+                    Text("Accessibility value").tag(NumericWriteMethod.accessibility)
+                    Text("Custom numeric · keyboard text").tag(NumericWriteMethod.keyboard)
+                }.font(StudioTheme.font(11))
+                if settings.writeMethod == .keyboard {
+                    Text("Reads the focused number and types the calculated value. Press Enter when finished if the app requires it. Non-numeric fields are left unchanged.")
+                        .font(StudioTheme.font(10)).foregroundStyle(StudioTheme.secondaryText)
+                }
             }
             HStack {
                 Text("WHEN HELD").frame(width: 112, alignment: .leading)
@@ -63,7 +74,7 @@ struct SmartDialEditor: View {
                 Text("Exact modifier match").font(StudioTheme.font(10)).foregroundStyle(StudioTheme.mutedText)
                     .help("Unassigned keyboard modifier combinations do nothing. Each dial direction is independent.")
             }.padding(.top, 3)
-            if settings.shortcut == nil {
+            if settings.shortcut == nil && settings.writeMethod == .accessibility {
                 Toggle("Use fallback actions for unsupported fields", isOn: $settings.fallbackToActions)
                     .font(StudioTheme.font(11)).padding(.top, 4)
             }
