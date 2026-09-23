@@ -32,3 +32,7 @@ The single-step methods give the most bounded physical test: after C9/C8 control
 ## Group selection boundary
 
 `QueryCurKeyGroupIndex` (`0x1000626c8`) requests `E8` and returns post-prefix payload byte 0 without validating it. The live USB response was not a valid string descriptor and resembled firmware data. Do not use `E8` to initialize or correct native group state. Report-8 group-button bits `0x1000` (previous) and `0x2000` (next) were physically captured, but the startup group, wrap behavior, and whether the device or host owns selection remain unverified. Track the input events and expose group state as unverified until synchronized by a physical observation. Explicit label packets can still address groups 1–6.
+
+## Live rotation cycle correction
+
+The production USB check observed consecutive `DE` payload values `3 → 4 → 1 → 2` after individual `DD` steps, ending at the restored baseline `2` (180°). The firmware uses `4` for the full-turn/zero orientation; the app normalizes it to 0°, retaining 0 as an equivalent decoder input. Values outside 0–4 remain unrecognized. Human comparison established that 270° places the dials below the readable display; the UI therefore rotates its dials-left artwork by `180° - reportedAngle`. This presentation transform is separate from packet decoding.

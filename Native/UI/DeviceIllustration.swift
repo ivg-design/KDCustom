@@ -1,392 +1,353 @@
+import AppKit
 import SwiftUI
 
-/// A scaled, interactive map of the K40's physical controls. The outer and inner
-/// concentric dials each expose separate clockwise and counterclockwise bindings.
+/// Canonical positions follow the supplied photograph with the dials on the left.
+/// Firmware dial 1 is inner; dial 2 is outer. A rotation changes presentation,
+/// never the ControlID assigned to a physical control.
 struct DeviceIllustration: View {
     let selectedControl: ControlID?
     let activeControls: Set<ControlID>
     let labels: [ControlID: String]
     let groupName: String
+    let groupNumber: Int
+    let orientationDegrees: Int
+    let batteryPercent: Int?
+    let connection: String?
     let onSelect: (ControlID) -> Void
 
-    private let designSize = CGSize(width: 1000, height: 432)
+    @State private var hoveredControl: ControlID?
+    private let canvasSize = CGSize(width: 1000, height: 476)
+    private static let deviceImage: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "kd-custom", withExtension: "png") else { return nil }
+        return NSImage(contentsOf: url)
+    }()
+
+    init(selectedControl: ControlID?, activeControls: Set<ControlID>, labels: [ControlID: String],
+         groupName: String, groupNumber: Int = 1, orientationDegrees: Int = 180,
+         batteryPercent: Int? = nil, connection: String? = nil,
+         onSelect: @escaping (ControlID) -> Void) {
+        self.selectedControl = selectedControl
+        self.activeControls = activeControls
+        self.labels = labels
+        self.groupName = groupName
+        self.groupNumber = groupNumber
+        self.orientationDegrees = orientationDegrees
+        self.batteryPercent = batteryPercent
+        self.connection = connection
+        self.onSelect = onSelect
+    }
+
+    private var rotation: Int {
+        let observed = [0, 90, 180, 270].contains(orientationDegrees) ? orientationDegrees : 180
+        // The device's orientation setting advances opposite the view's
+        // rotation. Firmware 270 therefore places the dials below the OLED.
+        return (180 - observed + 360) % 360
+    }
+
+    private var orientedSize: CGSize {
+        rotation.isMultiple(of: 180) ? canvasSize : CGSize(width: canvasSize.height, height: canvasSize.width)
+    }
 
     var body: some View {
-        GeometryReader { geometry in
-            let scale = min(geometry.size.width / designSize.width,
-                            geometry.size.height / designSize.height)
+        VStack(spacing: 16) {
+            GeometryReader { geometry in
+                let dimensions = orientedSize
+                let scale = min(geometry.size.width / dimensions.width,
+                                geometry.size.height / dimensions.height)
+                deviceCanvas
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .rotationEffect(.degrees(Double(rotation)))
+                    .frame(width: dimensions.width, height: dimensions.height)
+                    .scaleEffect(scale)
+                    .frame(width: dimensions.width * scale, height: dimensions.height * scale)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            illustration
-                .frame(width: designSize.width, height: designSize.height)
-                .scaleEffect(scale, anchor: .topLeading)
-                .frame(width: designSize.width * scale,
-                       height: designSize.height * scale,
-                       alignment: .topLeading)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 22) {
+                    directions("INNER · 1", cw: .dial1CW, ccw: .dial1CCW)
+                    directions("OUTER · 2", cw: .dial2CW, ccw: .dial2CCW)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    directions("INNER · 1", cw: .dial1CW, ccw: .dial1CCW)
+                    directions("OUTER · 2", cw: .dial2CW, ccw: .dial2CCW)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
         }
-        .aspectRatio(designSize.width / designSize.height, contentMode: .fit)
     }
 
-    private var illustration: some View {
+    private var deviceCanvas: some View {
         ZStack(alignment: .topLeading) {
-            deviceHousing
-
-            // The cable port and recessed display keep the vector faithful to
-            // the photographed hardware without representing live device state.
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(StudioTheme.canvas)
-                .frame(width: 58, height: 18)
-                .position(x: 371, y: 29)
-                .accessibilityHidden(true)
-
-            displayPanel
-                .frame(width: 454, height: 132)
-                .position(x: 637, y: 185)
-
-            ForEach(0..<4, id: \.self) { index in
-                keyButton(number: index + 1)
-                    .position(x: CGFloat(467 + 113 * index), y: 86)
-                keyButton(number: index + 5)
-                    .position(x: CGFloat(467 + 113 * index), y: 285)
+            if let photo = Self.deviceImage {
+                // The photo's shiny knurl has translucent white pixels. A rim-only
+                // silver substrate restores its intended appearance on dark UI.
+                DialAnnulus(outerInset: 2, innerInset: 40)
+                    .fill(Color(red: 0.92, green: 0.92, blue: 0.90), style: FillStyle(eoFill: true))
+                    .frame(width: 378, height: 378).position(x: 203, y: 238)
+                Image(nsImage: photo).resizable().interpolation(.high)
+                    .frame(width: 476, height: 1000)
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 1000, height: 476)
+                    .accessibilityHidden(true)
+            } else {
+                RoundedRectangle(cornerRadius: 100).fill(StudioTheme.hardwareBottom)
+                    .frame(width: 930, height: 380).position(x: 500, y: 238)
             }
 
-            groupButton(.setPrevious, title: "PREV", symbol: "chevron.up")
-                .position(x: 931, y: 106)
-            groupButton(.setNext, title: "NEXT", symbol: "chevron.down")
-                .position(x: 931, y: 263)
+            screen.frame(width: 378, height: 136).position(x: 622, y: 238)
+            physicalKey(.key1, title: "1", kind: .topLeft, width: 120, height: 66).position(x: 410, y: 110)
+            physicalKey(.key2, title: "2", kind: .middle, width: 116, height: 66).position(x: 529, y: 110)
+            physicalKey(.key3, title: "3", kind: .middle, width: 116, height: 66).position(x: 647, y: 110)
+            physicalKey(.key4, title: "4", kind: .topRight, width: 120, height: 66).position(x: 767, y: 110)
+            physicalKey(.key5, title: "5", kind: .bottomLeft, width: 120, height: 66).position(x: 410, y: 368)
+            physicalKey(.key6, title: "6", kind: .middle, width: 116, height: 66).position(x: 529, y: 368)
+            physicalKey(.key7, title: "7", kind: .middle, width: 116, height: 66).position(x: 647, y: 368)
+            physicalKey(.key8, title: "8", kind: .bottomRight, width: 120, height: 66).position(x: 767, y: 368)
 
-            Text("HUION")
-                .font(StudioTheme.font(13, weight: .medium))
-                .tracking(3.5)
-                .foregroundStyle(StudioTheme.mutedText)
-                .rotationEffect(.degrees(-90))
-                .position(x: 918, y: 185)
-                .accessibilityHidden(true)
-
-            outerDial
-                .position(x: 190, y: 185)
-            innerDial
-                .position(x: 190, y: 185)
-
-            directionSelector(name: "OUTER", counterclockwise: .dial1CCW, clockwise: .dial1CW)
-                .position(x: 122, y: 399)
-            directionSelector(name: "INNER", counterclockwise: .dial2CCW, clockwise: .dial2CW)
-                .position(x: 332, y: 399)
+            outerDial.frame(width: 378, height: 378).position(x: 203, y: 238)
+            innerDial.frame(width: 285, height: 285).position(x: 203, y: 238)
+            physicalKey(.setPrevious, title: "PREV", kind: .previous, width: 140, height: 160)
+                .position(x: 897, y: 158)
+            physicalKey(.setNext, title: "NEXT", kind: .next, width: 140, height: 160)
+                .position(x: 897, y: 318)
         }
-        .frame(width: designSize.width, height: designSize.height)
+        .frame(width: canvasSize.width, height: canvasSize.height)
     }
 
-    private var deviceHousing: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 104, style: .continuous)
-                .fill(LinearGradient(colors: [StudioTheme.hardwareTop, StudioTheme.hardwareBottom],
-                                     startPoint: .top, endPoint: .bottom))
-            RoundedRectangle(cornerRadius: 104, style: .continuous)
-                .strokeBorder(StudioTheme.hardwareEdge.opacity(0.72), lineWidth: 2)
-            RoundedRectangle(cornerRadius: 100, style: .continuous)
-                .strokeBorder(StudioTheme.canvas.opacity(0.7), lineWidth: 5)
-                .padding(5)
+    private var screen: some View {
+        let portrait = !rotation.isMultiple(of: 180)
+        return ZStack {
+            StudioTheme.display
+            screenContents(portrait: portrait)
+                .frame(width: portrait ? 136 : 378, height: portrait ? 378 : 136)
+                // The photograph and OLED glass rotate with the hardware. Only
+                // rendered glyphs counter-rotate to remain readable on screen.
+                .rotationEffect(.degrees(Double(-rotation)))
+                .frame(width: 378, height: 136)
         }
-        .frame(width: 893, height: 321)
-        .position(x: 540, y: 185)
-        .accessibilityHidden(true)
+        .frame(width: 378, height: 136)
+        .accessibilityLabel("Display preview, group \(groupNumber), \(groupName)")
     }
 
-    private var displayPanel: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(StudioTheme.display)
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(StudioTheme.hardwareEdge.opacity(0.65), lineWidth: 2)
+    private var screenOrder: [ControlID] {
+        switch rotation {
+        case 90: return [.key5, .key1, .key6, .key2, .key7, .key3, .key8, .key4]
+        case 180: return [.key8, .key7, .key6, .key5, .key4, .key3, .key2, .key1]
+        case 270: return [.key4, .key8, .key3, .key7, .key2, .key6, .key1, .key5]
+        default: return [.key1, .key2, .key3, .key4, .key5, .key6, .key7, .key8]
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 11) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(groupName.isEmpty ? "UNTITLED GROUP" : groupName.uppercased())
+    private func screenContents(portrait: Bool) -> some View {
+        let columns = portrait ? 2 : 4
+        let rows = portrait ? 4 : 2
+        let order = screenOrder
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Circle().strokeBorder(StudioTheme.displaySecondaryText, lineWidth: 1.3)
+                    .overlay(Text(String((1...6).contains(groupNumber) ? groupNumber : 1))
                         .font(StudioTheme.font(12, weight: .medium))
-                        .tracking(1.3)
+                        .foregroundStyle(StudioTheme.displayText))
+                    .frame(width: 21, height: 21)
+                Spacer(minLength: 2)
+                if let connection, !connection.isEmpty, connection != "—" {
+                    Image(systemName: connection.uppercased() == "USB" ? "cable.connector" :
+                            "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 10))
+                        .accessibilityHidden(true)
+                    Text(connection.uppercased() == "BLUETOOTH" ? "BT" : connection.uppercased())
+                        .font(StudioTheme.font(8, weight: .medium))
+                        .foregroundStyle(StudioTheme.displaySecondaryText)
                         .lineLimit(1)
-                    Spacer(minLength: 12)
-                    Text("K40")
-                        .font(StudioTheme.font(10, weight: .medium))
-                        .tracking(1.5)
-                        .foregroundStyle(StudioTheme.secondaryText)
                 }
-                Rectangle()
-                    .fill(StudioTheme.secondaryText.opacity(0.25))
-                    .frame(height: 1)
-                displayRow(startingAt: 1)
-                displayRow(startingAt: 5)
+                if let batteryPercent, (0...100).contains(batteryPercent) {
+                    Image(systemName: batterySymbol(for: batteryPercent))
+                        .font(.system(size: 11))
+                        .accessibilityHidden(true)
+                }
             }
-            .foregroundStyle(StudioTheme.text)
-            .padding(.horizontal, 19)
-            .padding(.vertical, 13)
+            .frame(height: 22)
+
+            ForEach(0..<rows, id: \.self) { row in
+                HStack(spacing: portrait ? 8 : 10) {
+                    ForEach(0..<columns, id: \.self) { column in
+                        let id = order[row * columns + column]
+                        Text(labels[id].flatMap { $0.isEmpty ? nil : $0 } ?? "—")
+                            .font(StudioTheme.font(12, weight: .medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .foregroundStyle(selectedControl == id ? StudioTheme.accent : StudioTheme.displayText)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .frame(maxHeight: .infinity)
+            }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Display preview, group \(groupName)")
+        .padding(portrait ? 11 : 17)
     }
 
-    private func displayRow(startingAt first: Int) -> some View {
-        HStack(spacing: 8) {
-            ForEach(first..<(first + 4), id: \.self) { number in
-                let id = keyID(number)
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text("\(number)")
-                        .foregroundStyle(StudioTheme.mutedText)
-                    Text(shortLabel(for: id))
-                        .foregroundStyle(StudioTheme.text)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 0)
-                }
-                .font(StudioTheme.font(11, weight: .medium))
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+    private func batterySymbol(for percent: Int) -> String {
+        switch percent {
+        case ..<13: "battery.0"
+        case ..<38: "battery.25"
+        case ..<63: "battery.50"
+        case ..<88: "battery.75"
+        default: "battery.100"
         }
+    }
+
+    private func physicalKey(_ id: ControlID, title: String, kind: PhysicalKeyShape.Kind,
+                             width: CGFloat, height: CGFloat) -> some View {
+        let shape = PhysicalKeyShape(kind: kind)
+        let emphasized = selectedControl == id || hoveredControl == id
+        return Button { onSelect(id) } label: {
+            shape.fill(activeControls.contains(id) ? StudioTheme.accent.opacity(0.20) : .clear)
+                .overlay(shape.stroke(emphasized ? StudioTheme.accent : .clear,
+                                      lineWidth: selectedControl == id ? 2.2 : 1.5))
+                .overlay(Text(title).font(StudioTheme.font(id == .setPrevious || id == .setNext ? 14 : 15, weight: .medium))
+                    .rotationEffect(.degrees(Double(-rotation)))
+                    .foregroundStyle(selectedControl == id ? StudioTheme.accent : .white.opacity(0.82)))
+                .contentShape(shape)
+                .frame(width: width, height: height)
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveredControl = $0 ? id : nil }
+        .help("\(title): \(labels[id] ?? "Unassigned")")
+        .accessibilityLabel("\(title), \(labels[id] ?? "Unassigned")")
     }
 
     private var outerDial: some View {
-        DialButton(id: .dial1CW,
-                   selected: selectedControl == .dial1CW || selectedControl == .dial1CCW,
-                   active: activeControls.contains(.dial1CW) || activeControls.contains(.dial1CCW),
-                   accessibilityName: "Outer dial clockwise",
-                   action: { onSelect(.dial1CW) }) {
-            ZStack {
-                Circle()
-                    .fill(StudioTheme.dialMetal)
-                    .overlay(Circle().strokeBorder(StudioTheme.text.opacity(0.23), lineWidth: 3))
-                ForEach(0..<72, id: \.self) { tick in
-                    Capsule()
-                        .fill(StudioTheme.canvas.opacity(tick.isMultiple(of: 3) ? 0.43 : 0.26))
-                        .frame(width: 1.5, height: 10)
-                        .offset(y: -162)
-                        .rotationEffect(.degrees(Double(tick) * 5))
-                }
-                Circle()
-                    .fill(StudioTheme.hardwareBottom)
-                    .frame(width: 277, height: 277)
-                    .overlay(Circle().strokeBorder(StudioTheme.canvas.opacity(0.85), lineWidth: 3))
-            }
-            .frame(width: 348, height: 348)
+        let shape = DialAnnulus(outerInset: 4, innerInset: 48)
+        let selected = selectedControl == .dial2CW || selectedControl == .dial2CCW
+        let active = activeControls.contains(.dial2CW) || activeControls.contains(.dial2CCW)
+        return Button { onSelect(.dial2CW) } label: {
+            shape.fill(active ? StudioTheme.accent.opacity(0.15) : .clear, style: FillStyle(eoFill: true))
+                .overlay(shape.stroke(selected || hoveredControl == .dial2CW ? StudioTheme.accent : .clear,
+                                      lineWidth: selected ? 2 : 1.5))
+                .contentShape(shape, eoFill: true)
         }
+        .buttonStyle(.plain)
+        .onHover { hoveredControl = $0 ? .dial2CW : nil }
+        .accessibilityLabel("Outer dial, clockwise by default; direction buttons below")
     }
 
     private var innerDial: some View {
-        DialButton(id: .dial2CW,
-                   selected: selectedControl == .dial2CW || selectedControl == .dial2CCW,
-                   active: activeControls.contains(.dial2CW) || activeControls.contains(.dial2CCW),
-                   accessibilityName: "Inner dial clockwise",
-                   action: { onSelect(.dial2CW) }) {
-            Circle()
-                .fill(LinearGradient(colors: [StudioTheme.dialCenter, StudioTheme.canvas],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
-                .overlay(Circle().strokeBorder(StudioTheme.hardwareEdge.opacity(0.8), lineWidth: 3))
-                .overlay {
-                    VStack(spacing: 6) {
-                        Text("02")
-                            .font(StudioTheme.font(30, weight: .light))
-                            .tracking(2)
-                        Text("INNER DIAL")
-                            .font(StudioTheme.font(10, weight: .medium))
-                            .tracking(2.4)
-                    }
-                    .foregroundStyle(StudioTheme.secondaryText)
-                }
-                .frame(width: 248, height: 248)
-        }
-    }
-
-    private func keyButton(number: Int) -> some View {
-        HardwareButton(id: keyID(number),
-                       title: String(format: "%02d", number),
-                       subtitle: "KEY",
-                       accessibilityName: "Key \(number), \(fullLabel(for: keyID(number)))",
-                       selected: selectedControl == keyID(number),
-                       active: activeControls.contains(keyID(number)),
-                       width: 108, height: 63) {
-            onSelect(keyID(number))
-        }
-    }
-
-    private func groupButton(_ id: ControlID, title: String, symbol: String) -> some View {
-        HardwareButton(id: id,
-                       title: title,
-                       subtitle: symbol,
-                       accessibilityName: "\(title == "PREV" ? "Previous" : "Next") group, \(fullLabel(for: id))",
-                       selected: selectedControl == id,
-                       active: activeControls.contains(id),
-                       width: 69, height: 79) {
-            onSelect(id)
-        }
-    }
-
-    private func directionSelector(name: String, counterclockwise: ControlID, clockwise: ControlID) -> some View {
-        HStack(spacing: 7) {
-            Text(name)
-                .font(StudioTheme.font(10, weight: .medium))
-                .tracking(1.4)
-                .foregroundStyle(StudioTheme.secondaryText)
-                .frame(width: 58, alignment: .leading)
-            DirectionButton(id: counterclockwise, title: "↶", name: "\(name.capitalized) dial counterclockwise",
-                            selected: selectedControl == counterclockwise,
-                            active: activeControls.contains(counterclockwise)) {
-                onSelect(counterclockwise)
-            }
-            DirectionButton(id: clockwise, title: "↷", name: "\(name.capitalized) dial clockwise",
-                            selected: selectedControl == clockwise,
-                            active: activeControls.contains(clockwise)) {
-                onSelect(clockwise)
-            }
-        }
-    }
-
-    private func keyID(_ number: Int) -> ControlID {
-        switch number {
-        case 1: .key1
-        case 2: .key2
-        case 3: .key3
-        case 4: .key4
-        case 5: .key5
-        case 6: .key6
-        case 7: .key7
-        default: .key8
-        }
-    }
-
-    private func fullLabel(for id: ControlID) -> String {
-        let value = labels[id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? "unassigned" : value
-    }
-
-    private func shortLabel(for id: ControlID) -> String {
-        let value = labels[id]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? "—" : value
-    }
-}
-
-private struct HardwareButton: View {
-    let id: ControlID
-    let title: String
-    let subtitle: String
-    let accessibilityName: String
-    let selected: Bool
-    let active: Bool
-    let width: CGFloat
-    let height: CGFloat
-    let action: () -> Void
-
-    @State private var hovered = false
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        Button(action: action) {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(active ? StudioTheme.keyPressed : hovered ? StudioTheme.keyHover : StudioTheme.keyFace)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(selected || focused ? StudioTheme.accent : StudioTheme.hardwareEdge,
-                                      lineWidth: selected || focused ? 2 : 1)
-                }
-                .overlay {
-                    VStack(spacing: 4) {
-                        Text(title)
-                            .font(StudioTheme.font(id == .setNext || id == .setPrevious ? 11 : 15,
-                                                   weight: .medium))
-                            .tracking(id == .setNext || id == .setPrevious ? 1.2 : 1.6)
-                        if subtitle == "KEY" {
-                            Text(subtitle)
-                                .font(StudioTheme.font(9, weight: .medium))
-                                .tracking(1.5)
-                                .foregroundStyle(StudioTheme.mutedText)
-                        } else {
-                            Image(systemName: subtitle)
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                    }
-                    .foregroundStyle(selected || active ? StudioTheme.accent : StudioTheme.secondaryText)
-                }
-                .frame(width: width, height: height)
-                .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .focused($focused)
-        .onHover { hovered = $0 }
-        .help(accessibilityName)
-        .accessibilityLabel(accessibilityName)
-        .accessibilityValue(selected ? "Selected" : active ? "Pressed" : "")
-    }
-}
-
-private struct DialButton<Content: View>: View {
-    let id: ControlID
-    let selected: Bool
-    let active: Bool
-    let accessibilityName: String
-    let action: () -> Void
-    @ViewBuilder let content: Content
-
-    @State private var hovered = false
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        Button(action: action) {
-            content
-                .overlay {
-                    Circle()
-                        .strokeBorder(selected || focused ? StudioTheme.accent :
-                                      hovered ? StudioTheme.secondaryText : .clear,
-                                      lineWidth: selected || focused ? 3 : 2)
-                }
-                .overlay(alignment: .bottom) {
-                    if active {
-                        Circle()
-                            .fill(StudioTheme.accent)
-                            .frame(width: 7, height: 7)
-                            .offset(y: -12)
-                    }
-                }
+        let selected = selectedControl == .dial1CW || selectedControl == .dial1CCW
+        let active = activeControls.contains(.dial1CW) || activeControls.contains(.dial1CCW)
+        return Button { onSelect(.dial1CW) } label: {
+            Circle().fill(active ? StudioTheme.accent.opacity(0.13) : .clear)
+                .overlay(Circle().strokeBorder(selected || hoveredControl == .dial1CW ? StudioTheme.accent : .clear,
+                                               lineWidth: selected ? 2 : 1.5))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .focused($focused)
-        .onHover { hovered = $0 }
-        .help(accessibilityName)
-        .accessibilityLabel(accessibilityName)
-        .accessibilityValue(selected ? "Selected" : active ? "Active" : "")
+        .onHover { hoveredControl = $0 ? .dial1CW : nil }
+        .accessibilityLabel("Inner dial, clockwise by default; direction buttons below")
+    }
+
+    private func directions(_ name: String, cw: ControlID, ccw: ControlID) -> some View {
+        HStack(spacing: 8) {
+            Text(name).font(StudioTheme.font(11, weight: .medium)).tracking(1.4)
+                .foregroundStyle(StudioTheme.secondaryText)
+            ForEach([ccw, cw], id: \.self) { id in
+                Button { onSelect(id) } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: id == cw ? "arrow.clockwise" : "arrow.counterclockwise")
+                            .font(.system(size: 16, weight: .medium))
+                            .frame(width: 17, height: 17)
+                        Text(id == cw ? "CW" : "CCW")
+                            .font(StudioTheme.font(13, weight: .medium))
+                    }
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .background(selectedControl == id ? StudioTheme.accentSoft : StudioTheme.panelRaised,
+                                    in: RoundedRectangle(cornerRadius: 6))
+                        .foregroundStyle(selectedControl == id ? StudioTheme.accent : StudioTheme.secondaryText)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(name) \(id == cw ? "clockwise" : "counterclockwise")")
+            }
+        }
     }
 }
 
-private struct DirectionButton: View {
-    let id: ControlID
-    let title: String
-    let name: String
-    let selected: Bool
-    let active: Bool
-    let action: () -> Void
+/// Two nested ellipses use even-odd fill and hit-testing. The outer dial never
+/// claims the inner dial's center.
+private struct DialAnnulus: Shape {
+    let outerInset: CGFloat
+    let innerInset: CGFloat
 
-    @State private var hovered = false
-    @FocusState private var focused: Bool
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addEllipse(in: rect.insetBy(dx: outerInset, dy: outerInset))
+        path.addEllipse(in: rect.insetBy(dx: innerInset, dy: innerInset))
+        return path
+    }
+}
 
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(StudioTheme.font(19, weight: .medium))
-                .foregroundStyle(selected || active ? StudioTheme.accent : StudioTheme.secondaryText)
-                .frame(width: 44, height: 31)
-                .background(selected || active ? StudioTheme.accentSoft :
-                            hovered ? StudioTheme.panelRaised : StudioTheme.panel,
-                            in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(selected || focused ? StudioTheme.accent : StudioTheme.divider,
-                                      lineWidth: selected || focused ? 1.5 : 1)
-                }
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+/// Small insets keep the amber selected outline inside each photographed key
+/// face, including the angled end keys and curved group-button segments.
+private struct PhysicalKeyShape: Shape {
+    enum Kind { case topLeft, middle, topRight, bottomLeft, bottomRight, previous, next }
+    let kind: Kind
+
+    func path(in rect: CGRect) -> Path {
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x * rect.width, y: rect.minY + y * rect.height)
         }
-        .buttonStyle(.plain)
-        .focused($focused)
-        .onHover { hovered = $0 }
-        .help(name)
-        .accessibilityLabel(name)
-        .accessibilityValue(selected ? "Selected" : active ? "Active" : "")
+        var path = Path()
+        switch kind {
+        case .middle:
+            path.addRoundedRect(in: rect.insetBy(dx: 2, dy: 3), cornerSize: CGSize(width: 4, height: 4))
+        case .topLeft:
+            path.move(to: point(0.13, 0.05))
+            path.addLine(to: point(0.98, 0.05))
+            path.addLine(to: point(0.98, 0.95))
+            path.addLine(to: point(0.39, 0.95))
+            path.addQuadCurve(to: point(0.29, 0.86), control: point(0.34, 0.95))
+            path.addLine(to: point(0.04, 0.36))
+            path.addQuadCurve(to: point(0.13, 0.05), control: point(0.00, 0.06))
+            path.closeSubpath()
+        case .topRight:
+            path.move(to: point(0.02, 0.05))
+            path.addLine(to: point(0.88, 0.05))
+            path.addQuadCurve(to: point(0.98, 0.16), control: point(0.98, 0.05))
+            path.addLine(to: point(0.98, 0.95))
+            path.addLine(to: point(0.02, 0.95))
+            path.closeSubpath()
+        case .bottomLeft:
+            path.move(to: point(0.39, 0.05))
+            path.addLine(to: point(0.98, 0.05))
+            path.addLine(to: point(0.98, 0.95))
+            path.addLine(to: point(0.13, 0.95))
+            path.addQuadCurve(to: point(0.04, 0.64), control: point(0.00, 0.94))
+            path.addLine(to: point(0.29, 0.14))
+            path.addQuadCurve(to: point(0.39, 0.05), control: point(0.34, 0.05))
+            path.closeSubpath()
+        case .bottomRight:
+            path.move(to: point(0.02, 0.05))
+            path.addLine(to: point(0.98, 0.05))
+            path.addLine(to: point(0.98, 0.84))
+            path.addQuadCurve(to: point(0.88, 0.95), control: point(0.98, 0.95))
+            path.addLine(to: point(0.02, 0.95))
+            path.closeSubpath()
+        case .previous:
+            path.move(to: point(0.03, 0.03))
+            path.addCurve(to: point(0.98, 0.97), control1: point(0.58, 0.03), control2: point(0.98, 0.53))
+            path.addLine(to: point(0.58, 0.97))
+            path.addCurve(to: point(0.03, 0.38), control1: point(0.55, 0.62), control2: point(0.27, 0.46))
+            path.closeSubpath()
+        case .next:
+            path.move(to: point(0.58, 0.03))
+            path.addLine(to: point(0.98, 0.03))
+            // The outer edge is one continuous quarter-ring arc. The former
+            // .42-to-.03 bottom chord cut across the photographed button face.
+            path.addCurve(to: point(0.03, 0.97), control1: point(0.98, 0.47), control2: point(0.58, 0.97))
+            path.addLine(to: point(0.03, 0.62))
+            path.addCurve(to: point(0.58, 0.03), control1: point(0.27, 0.54), control2: point(0.55, 0.38))
+            path.closeSubpath()
+        }
+        return path
     }
 }

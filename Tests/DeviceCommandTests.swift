@@ -33,7 +33,8 @@ enum DeviceCommandTests {
         for code in UInt8(0)...3 {
             check(Commands.decode(usb([code]), for: .rotation, transport: .usb)?.value == .rotationDegrees(Int(code) * 90), "rotation mapping")
         }
-        check(Commands.decode(usb([4]), for: .rotation, transport: .usb)?.value == .unrecognized, "unknown rotation retained")
+        check(Commands.decode(usb([4, 0, 0, 0]), for: .rotation, transport: .usb)?.value == .rotationDegrees(0), "live full-turn rotation normalizes to zero")
+        check(Commands.decode(usb([5]), for: .rotation, transport: .usb)?.value == .unrecognized, "unknown rotation retained")
 
         check(Commands.decode(usb([20, 100]), for: .battery, transport: .usb)?.value == .batteryBucket(20), "battery percent threshold")
         check(Commands.decode(usb([81, 100]), for: .battery, transport: .usb)?.value == .batteryBucket(100), "battery percent upper bucket")

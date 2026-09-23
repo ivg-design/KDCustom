@@ -123,7 +123,9 @@ enum K40DeviceCommands {
             }
         case .rotation:
             switch first {
-            case 0: return .rotationDegrees(0)
+            // Live K40 DD/DE cycles 1,2,3,4; 4 is a full turn.
+            // Retain 0 for the equivalent zero value accepted by the driver.
+            case 0, 4: return .rotationDegrees(0)
             case 1: return .rotationDegrees(90)
             case 2: return .rotationDegrees(180)
             case 3: return .rotationDegrees(270)
