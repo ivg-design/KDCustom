@@ -1,8 +1,9 @@
 import Foundation
 
-/// One down per physical detent. Consecutive detents become repeats of a held
-/// arrow; only an idle/context boundary emits its up. No timer generates downs.
+/// Normally one down per physical detent. An explicit rate trial can discard
+/// excess repeats without queuing work. No timer generates downs.
 struct RiveArrowBurst {
+    enum Delivery { case sent, filtered, unavailable }
     struct Event: Equatable {
         let keyCode: UInt16
         let modifiers: KeyModifiers
@@ -15,22 +16,34 @@ struct RiveArrowBurst {
         let lastDetent: TimeInterval
     }
     private var held: Held?
+    private var lastEmission: TimeInterval?
     static let idleInterval: TimeInterval = 0.08
 
     mutating func step(_ shortcut: SmartShortcut, context: RiveShortcutBuffer.Context,
-                       now: TimeInterval, emit: (Event) -> Bool) -> Bool {
-        guard now.isFinite, [125, 126].contains(shortcut.keyCode), shortcut.repeatCount == 1 else {
-            _ = end(emit: emit); return false
+                       now: TimeInterval, minimumInterval: TimeInterval = 0,
+                       emit: (Event) -> Bool) -> Delivery {
+        guard now.isFinite, minimumInterval.isFinite, minimumInterval >= 0,
+              [125, 126].contains(shortcut.keyCode), shortcut.repeatCount == 1 else {
+            _ = end(emit: emit); return .unavailable
         }
         if let held, held.context != context || held.shortcut != shortcut ||
             now < held.lastDetent || now - held.lastDetent >= Self.idleInterval {
-            guard end(emit: emit) else { return false }
+            guard end(emit: emit) else { return .unavailable }
+        }
+        if minimumInterval > 0, let lastEmission, now - lastEmission < minimumInterval {
+            // Rotation continues: retain the hold, but never replay skipped
+            // detents after stopping or changing direction/modifier/context.
+            if held != nil {
+                held = Held(context: context, shortcut: shortcut, lastDetent: now)
+            }
+            return .filtered
         }
         let event = Event(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers,
                           down: true, isRepeat: held != nil)
-        guard emit(event) else { _ = end(emit: emit); return false }
+        guard emit(event) else { _ = end(emit: emit); return .unavailable }
         held = Held(context: context, shortcut: shortcut, lastDetent: now)
-        return true
+        lastEmission = now
+        return .sent
     }
 
     @discardableResult

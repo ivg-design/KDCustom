@@ -114,6 +114,10 @@ enum MCPTools {
         tool("kdcustom_get_runtime", "runtime.get", "Get runtime",
              "Read active app, effective profile, device connection, and permissions as observed by the app.",
              empty, readOnly: true),
+        tool("kdcustom_test_rive_arrow_rate", "runtime.testRiveArrowRate", "Test Rive arrow repeat rate",
+             "Temporary diagnostic only. keyboard limits native Rive numeric-arrow downs to 12 Hz for five minutes; excess detents are discarded, never queued. Reversals release the old arrow immediately and obey the same cap. stop restores normal delivery. Sends no input, changes no profiles, and does not disable detection or output guards. Status and filtered count appear in get_runtime.",
+             object(["mode": ["type": "string", "enum": ["keyboard", "stop"]]], required: ["mode"]),
+             readOnly: false, destructive: false),
         tool("kdcustom_get_focused_input", "runtime.focus", "Get focused input",
              "Read focus metadata without field values. Opt-in Rive area detection checks whether focused nonsecure text is numeric without returning its value. Optional panelCapture starts a five-minute in-memory Rive AX/click diagnostic or stops it; results are historical, never automatic routes.",
              object(["panelCapture": ["type": "string", "enum": ["start", "stop"]]], required: []), readOnly: true),
@@ -166,6 +170,7 @@ enum MCPTools {
             }
             if key == "direction" && !["up", "down"].contains(string) { throw MCPInputError(reason: "Unknown rule direction") }
             if key == "panelCapture" && !["start", "stop"].contains(string) { throw MCPInputError(reason: "Unknown panel capture command") }
+            if key == "mode" && !["keyboard", "stop"].contains(string) { throw MCPInputError(reason: "Unknown arrow-rate test mode") }
         }
         if name == "kdcustom_update_profile" &&
             arguments["name"] == nil && arguments["appBundleIdentifier"] == nil {

@@ -163,3 +163,13 @@ Build 33 adds those identity bits only to the verified Rive numeric arrow path. 
 Focused tests verify both arrow identity bits, preservation of Command/Shift side flags, idempotence, and non-arrow exclusion. Live focus retention and modifier acceptance remain pending; no pacing limit has been introduced on the basis of the keyboard-rate comparison.
 
 Build 33 passed the warnings-as-errors native build, was Developer ID signed, notarized, stapled and accepted by Gatekeeper, and was installed after normal Quit and verified process exit. All 14 profiles are byte-identical across installation and relaunch; USB and all required permissions are ready.
+
+The user reports that build 33 still drops focus intermittently, sometimes after long rapid turns and sometimes quickly. Its HID observer confirms the new arrow flags and repeat markers, so the corrected payload alone does not resolve the issue. The user subsequently paused shortcut output and spun the dial for ten seconds in each direction: the numeric field stayed selected. This is physical acceptance of that paused test. Pause also stops automatic area scanning, so it does not separate output timing from that scanner.
+
+## Build 34: temporary keyboard-rate comparison
+
+The new explicit `kdcustom_test_rive_arrow_rate` diagnostic compares the active Rive numeric path at a maximum of 12 arrow downs per second with normal delivery. It expires after five minutes or on an explicit stop; it is off by default and never changes saved profiles. The first detent is immediate when the previous emission is outside the rate window. Excess detents are discarded and counted, without later catch-up. Reversals release the previous arrow immediately but cannot bypass the rate limit; neither can a focus/context reset. Filtered detents keep an existing hold alive while rotation continues. Timers only release keys, never generate downs.
+
+Automatic detection, modifier selection, flags, and the existing focus checks are unchanged. The app status displays the active test and runtime diagnostics expose the remaining time and filtered count. This is not a production responsiveness fix. A stable rate-limited live test would support an event-rate contribution; a captured focus drop with all downs at least 83.3 ms apart would falsify rate reduction as a sufficient solution.
+
+Focused arrow-state and MCP tests cover rate enforcement, no deferred output, reversal/context cancellation, unchanged normal mode, non-read-only tool metadata, and rejection of arbitrary output/duration parameters. Live comparison remains pending.

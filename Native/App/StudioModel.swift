@@ -79,6 +79,11 @@ final class StudioModel: ObservableObject {
     private var typedNumericJob: UUID?
     private var typedNumericSteps = NumericStepBuffer()
     private var riveShortcutSteps = RiveShortcutBuffer()
+    @Published private var riveArrowRateTestUntil: TimeInterval = 0
+    private var riveArrowRateFiltered = 0
+    private var riveArrowRateTestActive: Bool {
+        ProcessInfo.processInfo.systemUptime < riveArrowRateTestUntil
+    }
     @Published private var numericReselectionPID: pid_t?
     private var physicalEditingEpoch: UInt64 = 0
 
@@ -227,7 +232,7 @@ final class StudioModel: ObservableObject {
         if numericReselectionPID != nil && numericReselectionPID == lastForegroundPID {
             return "Select the numeric field again"
         }
-        return "Ready"
+        return riveArrowRateTestActive ? "Ready · Rive 12 Hz test" : "Ready"
     }
 
     func start() {
@@ -266,6 +271,9 @@ final class StudioModel: ObservableObject {
                     self.refreshOutputGate(reason: "Secure input changed")
                 }
                 self.engine.tick(now: ProcessInfo.processInfo.systemUptime)
+                if self.riveArrowRateTestUntil > 0 && !self.riveArrowRateTestActive {
+                    self.setRiveArrowRateTest(false)
+                }
                 self.output.tickRiveArrowBurst()
                 self.tickCount += 1
                 if self.tickCount % 50 == 0 { self.checkPermissions() }
@@ -420,18 +428,37 @@ final class StudioModel: ObservableObject {
             guard !focusObserver.revalidating, context == riveShortcutContext else { break }
             let sent = sendSmartShortcut(step.shortcut)
             recordDialDecision(step.control, modifiers: step.selectors, shortcut: step.shortcut,
-                               result: sent ? "Shortcut sent after focus verification" : "Shortcut unavailable")
-            panelDiagnostics.note("focusVerification", sent ? "Pending arrow sent to same field" : "Pending arrow unavailable")
-            if !sent { break }
+                               result: sent == .filtered ? "Skipped by temporary rate test" :
+                                sent == .sent ? "Shortcut sent after focus verification" : "Shortcut unavailable")
+            panelDiagnostics.note("focusVerification", sent == .filtered ? "Pending arrow skipped by rate test" :
+                sent == .sent ? "Pending arrow sent to same field" : "Pending arrow unavailable")
+            if sent == .unavailable { break }
         }
     }
 
-    private func sendSmartShortcut(_ shortcut: SmartShortcut) -> Bool {
+    private func sendSmartShortcut(_ shortcut: SmartShortcut) -> RiveArrowBurst.Delivery {
         if [125, 126].contains(shortcut.keyCode), shortcut.repeatCount == 1,
            let context = riveShortcutContext {
-            return output.riveArrowShortcut(shortcut, context: context)
+            let result = output.riveArrowShortcut(shortcut, context: context,
+                minimumInterval: riveArrowRateTestActive ? 1.0 / 12.0 : 0)
+            if result == .filtered { riveArrowRateFiltered += 1 }
+            return result
         }
-        return output.smartShortcut(shortcut)
+        return output.smartShortcut(shortcut) ? .sent : .unavailable
+    }
+    private func setRiveArrowRateTest(_ enabled: Bool) {
+        output.endRiveArrowBurst()
+        riveShortcutSteps.clear()
+        riveArrowRateTestUntil = enabled ? ProcessInfo.processInfo.systemUptime + 300 : 0
+        if enabled { riveArrowRateFiltered = 0 }
+        panelDiagnostics.note("arrowRateTest", enabled ? "12 Hz repeat trial started" : "Normal repeat rate restored")
+        onStatusChange?()
+    }
+    private var riveArrowRateTestStatus: [String: Any] {
+        ["active": riveArrowRateTestActive,
+         "remainingSeconds": max(0, riveArrowRateTestUntil - ProcessInfo.processInfo.systemUptime),
+         "filteredDetents": riveArrowRateFiltered,
+         "repeatLimitHz": riveArrowRateTestActive ? 12 : NSNull()]
     }
     private func smartDial(_ binding: ControlBinding) {
         engine.prepareSmartDial(binding.controlID)
@@ -451,8 +478,10 @@ final class StudioModel: ObservableObject {
             cancelNumericWork()
             let sent = sendSmartShortcut(shortcut)
             recordDialDecision(binding.controlID, modifiers: modifiers, shortcut: shortcut,
-                               result: sent ? "Shortcut sent" : "Shortcut unavailable")
-            record(sent ? "Smart · custom shortcut sent" : "Smart · shortcut unavailable")
+                               result: sent == .filtered ? "Skipped by temporary rate test" :
+                                sent == .sent ? "Shortcut sent" : "Shortcut unavailable")
+            record(sent == .filtered ? "Smart · temporary rate test skipped detent" :
+                sent == .sent ? "Smart · custom shortcut sent" : "Smart · shortcut unavailable")
             return
         }
         let focus = focusedInput
@@ -879,6 +908,13 @@ final class StudioModel: ObservableObject {
     }
     private func handleAgent(_ operation: String, arguments: [String: Any]) throws -> [String: Any] {
         switch operation {
+        case "runtime.testRiveArrowRate":
+            guard Set(arguments.keys) == ["mode"], let mode = arguments["mode"] as? String,
+                  ["keyboard", "stop"].contains(mode) else {
+                throw MCPInputError(reason: "Choose keyboard or stop for the bounded Rive arrow-rate test")
+            }
+            setRiveArrowRateTest(mode == "keyboard")
+            return riveArrowRateTestStatus
         case "runtime.focus":
             guard Set(arguments.keys).isSubset(of: ["panelCapture"]) else { throw MCPInputError(reason: "Unexpected focus arguments") }
             if let raw = arguments["panelCapture"] {
@@ -907,7 +943,8 @@ final class StudioModel: ObservableObject {
                     "dialDiagnostics": ["physicalModifiers": output.physicalModifiers.rawValue,
                                         "recentDecisions": recentDialDecisions,
                                         "recentSmartEvents": Array(recentEvents.filter { $0.hasPrefix("Smart ·") }.suffix(20))],
-                    "outputStatus": outputStatus, "device": ["state": connection, "transport": transport, "ready": ready],
+                    "outputStatus": outputStatus, "riveArrowRateTest": riveArrowRateTestStatus,
+                    "device": ["state": connection, "transport": transport, "ready": ready],
                     "inputArea": currentInputArea?.rawValue as Any? ?? NSNull(), "inputAreaStatus": inputAreaStatus,
                     "permissions": ["accessibility": accessibilityAllowed, "inputMonitoring": inputAllowed, "bluetooth": bluetoothAllowed]]
         case "device.getSettings":
