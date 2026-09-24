@@ -158,10 +158,9 @@ final class SystemActionOutput: ActionOutput {
         return true
     }
 
-    func riveArrowShortcut(_ shortcut: SmartShortcut, context: RiveShortcutBuffer.Context,
-                           minimumInterval: TimeInterval = 0) -> RiveArrowBurst.Delivery {
+    func riveArrowShortcut(_ shortcut: SmartShortcut, context: RiveShortcutBuffer.Context) -> RiveArrowBurst.Delivery {
         riveArrowBurst.step(shortcut, context: context, now: ProcessInfo.processInfo.systemUptime,
-                            minimumInterval: minimumInterval, emit: emitRiveArrow)
+                            emit: emitRiveArrow)
     }
     func tickRiveArrowBurst() {
         riveArrowBurst.tick(now: ProcessInfo.processInfo.systemUptime, emit: emitRiveArrow)

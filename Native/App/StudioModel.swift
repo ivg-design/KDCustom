@@ -81,6 +81,7 @@ final class StudioModel: ObservableObject {
     private var riveShortcutSteps = RiveShortcutBuffer()
     @Published private var riveArrowRateTestUntil: TimeInterval = 0
     private var riveArrowRateFiltered = 0
+    private var riveArrowRateFilteredTotal = 0
     private var riveArrowRateTestActive: Bool {
         ProcessInfo.processInfo.systemUptime < riveArrowRateTestUntil
     }
@@ -232,7 +233,7 @@ final class StudioModel: ObservableObject {
         if numericReselectionPID != nil && numericReselectionPID == lastForegroundPID {
             return "Select the numeric field again"
         }
-        return riveArrowRateTestActive ? "Ready · Rive 12 Hz test" : "Ready"
+        return usesAreaRules && currentInputArea == .numeric ? "Ready · Rive 12 Hz" : "Ready"
     }
 
     func start() {
@@ -428,9 +429,9 @@ final class StudioModel: ObservableObject {
             guard !focusObserver.revalidating, context == riveShortcutContext else { break }
             let sent = sendSmartShortcut(step.shortcut)
             recordDialDecision(step.control, modifiers: step.selectors, shortcut: step.shortcut,
-                               result: sent == .filtered ? "Skipped by temporary rate test" :
+                               result: sent == .filtered ? "Skipped by Rive 12 Hz limit" :
                                 sent == .sent ? "Shortcut sent after focus verification" : "Shortcut unavailable")
-            panelDiagnostics.note("focusVerification", sent == .filtered ? "Pending arrow skipped by rate test" :
+            panelDiagnostics.note("focusVerification", sent == .filtered ? "Pending arrow skipped by Rive 12 Hz limit" :
                 sent == .sent ? "Pending arrow sent to same field" : "Pending arrow unavailable")
             if sent == .unavailable { break }
         }
@@ -439,26 +440,26 @@ final class StudioModel: ObservableObject {
     private func sendSmartShortcut(_ shortcut: SmartShortcut) -> RiveArrowBurst.Delivery {
         if [125, 126].contains(shortcut.keyCode), shortcut.repeatCount == 1,
            let context = riveShortcutContext {
-            let result = output.riveArrowShortcut(shortcut, context: context,
-                minimumInterval: riveArrowRateTestActive ? 1.0 / 12.0 : 0)
-            if result == .filtered { riveArrowRateFiltered += 1 }
+            let result = output.riveArrowShortcut(shortcut, context: context)
+            if result == .filtered {
+                riveArrowRateFilteredTotal += 1
+                if riveArrowRateTestActive { riveArrowRateFiltered += 1 }
+            }
             return result
         }
         return output.smartShortcut(shortcut) ? .sent : .unavailable
     }
     private func setRiveArrowRateTest(_ enabled: Bool) {
-        output.endRiveArrowBurst()
-        riveShortcutSteps.clear()
         riveArrowRateTestUntil = enabled ? ProcessInfo.processInfo.systemUptime + 300 : 0
         if enabled { riveArrowRateFiltered = 0 }
-        panelDiagnostics.note("arrowRateTest", enabled ? "12 Hz repeat trial started" : "Normal repeat rate restored")
+        panelDiagnostics.note("arrowRateTest", enabled ? "12 Hz measurement started" : "Measurement stopped; 12 Hz limit remains")
         onStatusChange?()
     }
     private var riveArrowRateTestStatus: [String: Any] {
         ["active": riveArrowRateTestActive,
          "remainingSeconds": max(0, riveArrowRateTestUntil - ProcessInfo.processInfo.systemUptime),
          "filteredDetents": riveArrowRateFiltered,
-         "repeatLimitHz": riveArrowRateTestActive ? 12 : NSNull()]
+         "repeatLimitHz": RiveArrowBurst.repeatLimitHz]
     }
     private func smartDial(_ binding: ControlBinding) {
         engine.prepareSmartDial(binding.controlID)
@@ -478,9 +479,9 @@ final class StudioModel: ObservableObject {
             cancelNumericWork()
             let sent = sendSmartShortcut(shortcut)
             recordDialDecision(binding.controlID, modifiers: modifiers, shortcut: shortcut,
-                               result: sent == .filtered ? "Skipped by temporary rate test" :
+                               result: sent == .filtered ? "Skipped by Rive 12 Hz limit" :
                                 sent == .sent ? "Shortcut sent" : "Shortcut unavailable")
-            record(sent == .filtered ? "Smart · temporary rate test skipped detent" :
+            record(sent == .filtered ? "Smart · Rive 12 Hz limit skipped detent" :
                 sent == .sent ? "Smart · custom shortcut sent" : "Smart · shortcut unavailable")
             return
         }
@@ -944,6 +945,9 @@ final class StudioModel: ObservableObject {
                                         "recentDecisions": recentDialDecisions,
                                         "recentSmartEvents": Array(recentEvents.filter { $0.hasPrefix("Smart ·") }.suffix(20))],
                     "outputStatus": outputStatus, "riveArrowRateTest": riveArrowRateTestStatus,
+                    "riveArrowRateLimit": ["repeatLimitHz": RiveArrowBurst.repeatLimitHz,
+                                           "scope": "Rive numeric shortcuts",
+                                           "filteredDetents": riveArrowRateFilteredTotal],
                     "device": ["state": connection, "transport": transport, "ready": ready],
                     "inputArea": currentInputArea?.rawValue as Any? ?? NSNull(), "inputAreaStatus": inputAreaStatus,
                     "permissions": ["accessibility": accessibilityAllowed, "inputMonitoring": inputAllowed, "bluetooth": bluetoothAllowed]]

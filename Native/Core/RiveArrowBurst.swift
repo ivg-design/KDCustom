@@ -1,7 +1,7 @@
 import Foundation
 
-/// Normally one down per physical detent. An explicit rate trial can discard
-/// excess repeats without queuing work. No timer generates downs.
+/// Rive numeric arrows use the physically validated keyboard repeat rate.
+/// Excess detents are discarded without catch-up. No timer generates downs.
 struct RiveArrowBurst {
     enum Delivery { case sent, filtered, unavailable }
     struct Event: Equatable {
@@ -17,10 +17,12 @@ struct RiveArrowBurst {
     }
     private var held: Held?
     private var lastEmission: TimeInterval?
+    static let repeatLimitHz: Double = 12
+    static let minimumInterval: TimeInterval = 1.0 / repeatLimitHz
     static let idleInterval: TimeInterval = 0.08
 
     mutating func step(_ shortcut: SmartShortcut, context: RiveShortcutBuffer.Context,
-                       now: TimeInterval, minimumInterval: TimeInterval = 0,
+                       now: TimeInterval, minimumInterval: TimeInterval = Self.minimumInterval,
                        emit: (Event) -> Bool) -> Delivery {
         guard now.isFinite, minimumInterval.isFinite, minimumInterval >= 0,
               [125, 126].contains(shortcut.keyCode), shortcut.repeatCount == 1 else {

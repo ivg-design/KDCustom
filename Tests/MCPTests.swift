@@ -78,18 +78,18 @@ enum MCPTests {
               calls.count == beforeInvalidPanel, "unbounded panel capture is rejected before the app")
         let rateTest = listed?.first { $0["name"] as? String == "kdcustom_test_rive_arrow_rate" }
         check((rateTest?["annotations"] as? [String: Any])?["readOnlyHint"] as? Bool == false,
-              "Rate trial is explicitly a runtime mutation")
+              "Rate measurement is explicitly a runtime mutation")
         check(result(send(server, call(63, "kdcustom_test_rive_arrow_rate", ["mode": "keyboard"])))?["isError"] as? Bool == false &&
-              calls.last?.0 == "runtime.testRiveArrowRate", "Bounded rate trial routes to app")
+              calls.last?.0 == "runtime.testRiveArrowRate", "Bounded rate measurement routes to app")
         check(result(send(server, call(64, "kdcustom_test_rive_arrow_rate", ["mode": "stop"])))?["isError"] as? Bool == false,
-              "Rate trial can be stopped explicitly")
+              "Rate measurement can be stopped explicitly")
         let beforeInvalidRate = calls.count
         for args: [String: Any] in [["mode": "forever"], ["mode": "keyboard", "duration": 99999], ["mode": "keyboard", "keyCode": 36]] {
             check(result(send(server, call(65, "kdcustom_test_rive_arrow_rate", args)))?["isError"] as? Bool == true,
-                  "Rate trial cannot accept duration overrides or arbitrary output")
+                  "Rate measurement cannot accept duration overrides or arbitrary output")
         }
         check(calls.count == beforeInvalidRate && !MCPTools.batchNames.contains("kdcustom_test_rive_arrow_rate"),
-              "Invalid trials do not reach app or profile batches")
+              "Invalid measurements do not reach app or profile batches")
 
         check(code(send(server, request(7, "unknown"))) == -32601,
               "unknown methods return method-not-found")
