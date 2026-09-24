@@ -255,7 +255,8 @@ final class RivePanelProbe {
             snapshot.editableTextFocused = true
             // Area routing needs only a boolean; never retain the field value.
             if inspectNumericText, let value = string(kAXValueAttribute as CFString, from: focused) {
-                snapshot.numericTextFocused = NumericAdjustment.equalValues(value, value)
+                snapshot.numericTextFormat = RiveNumericText.format(value)
+                snapshot.numericTextFocused = snapshot.numericTextFormat != nil
             }
             guard let stillFocused = element(kAXFocusedUIElementAttribute as CFString, from: app),
                   CFEqual(stillFocused, focused) else { return nil }

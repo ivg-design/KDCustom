@@ -8,6 +8,8 @@ import Foundation
 final class FocusedInputObserver {
     var onChange: ((FocusSnapshot) -> Void)?
     var onWindowChange: (() -> Void)?
+    var onRevalidationChange: ((Bool) -> Void)?
+    private(set) var revalidating = false
     var defersAreaObservation: Bool { numericLease.defersFocusNotifications() }
 
     private var pid: pid_t?
@@ -28,6 +30,8 @@ final class FocusedInputObserver {
                 // Deliver unchanged polls too: the caller uses them to renew
                 // freshness, while comparing equality before changing routes.
                 self.snapshot = candidate
+                let wasRevalidating = self.revalidating
+                self.revalidating = false
                 if candidate.kind == .unavailable || candidate.kind == .secure {
                     self.numericLease.invalidate()
                 } else {
@@ -35,13 +39,14 @@ final class FocusedInputObserver {
                                               token: candidate.token)
                 }
                 self.onChange?(candidate)
+                if wasRevalidating { self.onRevalidationChange?(false) }
             }
         }
         worker.onFocusNotification = { [weak self] notificationGeneration, windowChanged in
             guard let self, self.generation == notificationGeneration else { return }
             if windowChanged { self.onWindowChange?() }
             if !windowChanged && self.numericLease.defersFocusNotifications() { return }
-            self.invalidateForFocusChange()
+            self.invalidateForFocusChange(windowChanged: windowChanged)
         }
     }
 
@@ -101,9 +106,19 @@ final class FocusedInputObserver {
                              completion: completion)
     }
 
-    private func invalidateForFocusChange() {
+    private func invalidateForFocusChange(windowChanged: Bool) {
         guard enabled else { return }
         focusEpoch &+= 1
+        // Rive re-announces the same native editor after arrow updates. Keep
+        // its identity for comparison, but suspend output until a fresh AX
+        // read verifies it. Real changes still publish a new token below.
+        if !windowChanged, bundleIdentifier == "app.rive.editor",
+           snapshot.kind != .unavailable, snapshot.kind != .secure {
+            numericLease.invalidate()
+            if !revalidating { revalidating = true; onRevalidationChange?(true) }
+            worker.focusChanged(epoch: focusEpoch, unavailable: nil)
+            return
+        }
         publishUnavailable()
         worker.focusChanged(epoch: focusEpoch, unavailable: snapshot)
     }
@@ -113,6 +128,7 @@ final class FocusedInputObserver {
         let empty = FocusSnapshot()
         snapshot = empty
         onChange?(empty)
+        if revalidating { revalidating = false; onRevalidationChange?(false) }
     }
 }
 
@@ -146,6 +162,9 @@ private final class FocusAXWorker: @unchecked Sendable {
     private var epoch: UInt64 = 0
     private var lastElement: AXUIElement?
     private var lastSnapshot: FocusSnapshot?
+    private var lastWindow: AXUIElement?
+    private var lastWindowFrame: CGRect?
+    private var lastFieldFrame: CGRect?
     private weak var keyboardOutput: SystemActionOutput?
 
     init(lease: NumericAdjustmentLease) {
@@ -164,6 +183,7 @@ private final class FocusAXWorker: @unchecked Sendable {
             timer = nil
             app = nil
             lastElement = nil
+            lastWindow = nil; lastWindowFrame = nil; lastFieldFrame = nil
             lastSnapshot = unavailable
             observedPID = pid
             self.bundleIdentifier = bundleIdentifier
@@ -186,11 +206,14 @@ private final class FocusAXWorker: @unchecked Sendable {
         }
     }
 
-    func focusChanged(epoch: UInt64, unavailable: FocusSnapshot) {
+    func focusChanged(epoch: UInt64, unavailable: FocusSnapshot?) {
         queue.async { [self] in
             self.epoch = epoch
-            lastElement = nil
-            lastSnapshot = unavailable
+            if let unavailable {
+                lastElement = nil
+                lastWindow = nil; lastWindowFrame = nil; lastFieldFrame = nil
+                lastSnapshot = unavailable
+            }
             refresh()
         }
     }
@@ -599,13 +622,28 @@ private final class FocusAXWorker: @unchecked Sendable {
         let identifier = secure ? nil : stringAttribute(kAXIdentifierAttribute as CFString, from: focused).map(capped)
         let label = secure ? nil : (stringAttribute(kAXTitleAttribute as CFString, from: focused)
                                     ?? stringAttribute(kAXDescriptionAttribute as CFString, from: focused)).map(capped)
+        // Native Flutter editors can be reused between fields. Their frame
+        // and window are part of continuity; AX element identity alone is not.
+        var sameScope = true
+        if bundleIdentifier == "app.rive.editor" {
+            guard let window = elementAttribute(kAXFocusedWindowAttribute as CFString, from: app),
+                  let windowFrame = frame(of: window), let fieldFrame = frame(of: focused),
+                  hasExpectedApp(pid, deadline: deadline),
+                  let stillFocused = elementAttribute(kAXFocusedUIElementAttribute as CFString, from: app),
+                  CFEqual(stillFocused, focused),
+                  let stillWindow = elementAttribute(kAXFocusedWindowAttribute as CFString, from: app),
+                  CFEqual(stillWindow, window) else { return unavailable() }
+            sameScope = lastWindow.map { CFEqual($0, window) } == true &&
+                lastWindowFrame == windowFrame && lastFieldFrame == fieldFrame
+            lastWindow = window; lastWindowFrame = windowFrame; lastFieldFrame = fieldFrame
+        }
         guard ProcessInfo.processInfo.systemUptime <= deadline else { return unavailable() }
         let sameElement = lastElement.map { CFEqual($0, focused) } ?? false
         let sameMetadata = lastSnapshot.map {
             $0.bundleIdentifier == bundleIdentifier && $0.role == role && $0.subrole == subrole
                 && $0.identifier == identifier && $0.label == label && $0.kind == kind
         } ?? false
-        let token = sameElement && sameMetadata ? lastSnapshot!.token : UUID().uuidString
+        let token = sameElement && sameMetadata && sameScope ? lastSnapshot!.token : UUID().uuidString
         let next = FocusSnapshot(token: token, bundleIdentifier: bundleIdentifier, role: role,
                                  subrole: subrole, identifier: identifier, label: label, kind: kind)
         lastElement = focused

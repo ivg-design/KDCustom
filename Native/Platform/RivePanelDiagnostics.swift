@@ -135,6 +135,7 @@ final class RivePanelDiagnostics {
                 "interactionUptime": snapshot.interactionAt as Any? ?? NSNull(),
                 "editableTextFocused": snapshot.editableTextFocused,
                 "numericTextFocused": snapshot.numericTextFocused,
+                "numericTextFormat": snapshot.numericTextFormat?.rawValue as Any? ?? NSNull(),
                 "focusedNodeID": snapshot.focusedNodeID as Any? ?? NSNull(),
                 "hitNodeID": snapshot.hitNodeID as Any? ?? NSNull(), "truncated": snapshot.truncated,
                 "nodes": snapshot.nodes.map { node in

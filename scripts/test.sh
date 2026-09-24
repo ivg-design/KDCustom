@@ -26,9 +26,12 @@ run NumericAdjustment Native/Core/NumericAdjustment.swift
 run NumericStepBuffer Native/Core/NumericAdjustment.swift Native/Core/NumericStepBuffer.swift
 run NumericAdjustmentLease Native/Core/NumericAdjustmentLease.swift
 run NumericFocusGeometry Native/Core/NumericFocusGeometry.swift
-run RivePanelClassifier Native/Core/RivePanelClassifier.swift
-run RiveAreaLayout Native/Core/Models.swift Native/Core/RivePanelClassifier.swift Native/Core/RiveAreaLayout.swift
-run RiveAreaSelection Native/Core/Models.swift Native/Core/RivePanelClassifier.swift Native/Core/RiveAreaLayout.swift Native/Core/RiveAreaSelection.swift
+RIVE=(Native/Core/NumericAdjustment.swift Native/Core/RiveNumericText.swift Native/Core/RivePanelClassifier.swift)
+run RiveNumericText Native/Core/NumericAdjustment.swift Native/Core/RiveNumericText.swift
+run RiveShortcutBuffer Native/Core/Models.swift Native/Core/RiveShortcutBuffer.swift
+run RivePanelClassifier "${RIVE[@]}"
+run RiveAreaLayout Native/Core/Models.swift "${RIVE[@]}" Native/Core/RiveAreaLayout.swift
+run RiveAreaSelection Native/Core/Models.swift "${RIVE[@]}" Native/Core/RiveAreaLayout.swift Native/Core/RiveAreaSelection.swift
 run ShortcutRecorder Native/Core/Models.swift Native/UI/StudioTheme.swift Native/UI/BindingEditor.swift Native/UI/SmartDialEditor.swift -framework AppKit -framework SwiftUI
 run ConfigurationService "${CORE[@]}" Native/Core/ConfigurationService.swift
 run HuionImport "${CORE[@]}" Native/Core/HuionImporter.swift

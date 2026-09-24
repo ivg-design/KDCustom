@@ -107,6 +107,7 @@ struct RivePanelSnapshot: Sendable {
     var focusedElementKey: UInt64? = nil
     var editableTextFocused = false
     var numericTextFocused = false
+    var numericTextFormat: RiveNumericText.Format? = nil
 }
 
 enum RivePanelConfidence: Equatable, Sendable {

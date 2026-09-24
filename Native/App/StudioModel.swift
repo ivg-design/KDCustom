@@ -78,6 +78,7 @@ final class StudioModel: ObservableObject {
     private var typedNumericContext: TypedNumericContext?
     private var typedNumericJob: UUID?
     private var typedNumericSteps = NumericStepBuffer()
+    private var riveShortcutSteps = RiveShortcutBuffer()
     @Published private var numericReselectionPID: pid_t?
     private var physicalEditingEpoch: UInt64 = 0
 
@@ -107,6 +108,7 @@ final class StudioModel: ObservableObject {
         output.onPhysicalEditingInput = { [weak self] in
             guard let self else { return }
             self.physicalEditingEpoch &+= 1
+            self.riveShortcutSteps.clear()
             self.inputAreaObserver.physicalInput()
             self.cancelNumericWork()
             if self.numericReselectionPID == NSWorkspace.shared.frontmostApplication?.processIdentifier {
@@ -145,6 +147,14 @@ final class StudioModel: ObservableObject {
             self.onStatusChange?()
         }
         focusObserver.onWindowChange = { [weak self] in self?.inputAreaObserver.reset() }
+        focusObserver.onRevalidationChange = { [weak self] pending in
+            guard let self else { return }
+            if pending {
+                self.cancelActions(reason: "Verifying focused control")
+            } else {
+                self.flushRiveShortcuts()
+            }
+        }
         focusObserver.setKeyboardOutput(output)
         device.onControl = { [weak self] control, down in self?.input(control, down: down) }
         device.onStatus = { [weak self] in self?.record($0) }
@@ -319,6 +329,7 @@ final class StudioModel: ObservableObject {
     }
     private func cancelActions(reason: String) {
         panelDiagnostics.note("cancel", reason)
+        riveShortcutSteps.clear()
         cancelNumericWork()
         engine.cancelAll(reason: reason)
     }
@@ -348,6 +359,10 @@ final class StudioModel: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self?.activeControls.remove(control) }
         }
         guard !IsSecureEventInputEnabled(), output.enabled else { return }
+        if focusObserver.revalidating {
+            if down, control.isDial { deferRiveShortcut(control) }
+            return
+        }
         let area = currentInputArea
         if control.isDial && usesAreaRules &&
             effectiveProfile.matchingRule(for: focusedInput, area: area) == nil {
@@ -362,6 +377,41 @@ final class StudioModel: ObservableObject {
         }
         cancelNumericWork()
         engine.handle(control: control, isDown: down, binding: binding, now: ProcessInfo.processInfo.systemUptime)
+    }
+
+    private var riveShortcutContext: RiveShortcutBuffer.Context? {
+        guard usesAreaRules, currentInputArea == .numeric, output.enabled,
+              !IsSecureEventInputEnabled(), let pid = lastForegroundPID,
+              pid == NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              ProcessInfo.processInfo.systemUptime - focusConfirmedAt <= 0.8,
+              numericReselectionPID != pid,
+              let rule = effectiveProfile.matchingRule(for: focusedInput, area: .numeric) else { return nil }
+        return .init(pid: pid, profile: effectiveProfile.id, revision: revision,
+                     group: rule.targetGroupID, focusToken: focusedInput.token)
+    }
+
+    private func deferRiveShortcut(_ control: ControlID) {
+        guard let context = riveShortcutContext,
+              let binding = effectiveProfile.binding(for: control, focus: focusedInput, area: .numeric),
+              binding.dialBehavior == .smart,
+              let shortcut = binding.smart?.selection(for: output.physicalModifiers)?.shortcut,
+              [125, 126].contains(shortcut.keyCode), shortcut.repeatCount == 1 else { return }
+        let step = RiveShortcutBuffer.Step(control: control, selectors: output.physicalModifiers, shortcut: shortcut)
+        let accepted = riveShortcutSteps.append(step, context: context, now: ProcessInfo.processInfo.systemUptime)
+        panelDiagnostics.note("focusVerification", accepted ? "Arrow detent pending" : "Pending detent rejected")
+    }
+
+    private func flushRiveShortcuts() {
+        let context = riveShortcutContext
+        let steps = riveShortcutSteps.take(context: context, now: ProcessInfo.processInfo.systemUptime)
+        for step in steps {
+            guard !focusObserver.revalidating, context == riveShortcutContext else { break }
+            let sent = output.smartShortcut(step.shortcut)
+            recordDialDecision(step.control, modifiers: step.selectors, shortcut: step.shortcut,
+                               result: sent ? "Shortcut sent after focus verification" : "Shortcut unavailable")
+            panelDiagnostics.note("focusVerification", sent ? "Pending arrow sent to same field" : "Pending arrow unavailable")
+            if !sent { break }
+        }
     }
     private func smartDial(_ binding: ControlBinding) {
         engine.prepareSmartDial(binding.controlID)
