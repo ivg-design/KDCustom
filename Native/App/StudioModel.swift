@@ -150,7 +150,12 @@ final class StudioModel: ObservableObject {
         focusObserver.onRevalidationChange = { [weak self] pending in
             guard let self else { return }
             if pending {
-                self.cancelActions(reason: "Verifying focused control")
+                // Stop scheduled work without breaking a native arrow repeat
+                // while the same field is checked. A real change cancels it.
+                self.panelDiagnostics.note("cancel", "Verifying focused control")
+                self.riveShortcutSteps.clear()
+                self.cancelNumericWork()
+                self.engine.cancelAll(reason: "Verifying focused control")
             } else {
                 self.flushRiveShortcuts()
             }
@@ -257,6 +262,7 @@ final class StudioModel: ObservableObject {
                     self.refreshOutputGate(reason: "Secure input changed")
                 }
                 self.engine.tick(now: ProcessInfo.processInfo.systemUptime)
+                self.output.tickRiveArrowBurst()
                 self.tickCount += 1
                 if self.tickCount % 50 == 0 { self.checkPermissions() }
             }
@@ -329,6 +335,7 @@ final class StudioModel: ObservableObject {
     }
     private func cancelActions(reason: String) {
         panelDiagnostics.note("cancel", reason)
+        output.endRiveArrowBurst()
         riveShortcutSteps.clear()
         cancelNumericWork()
         engine.cancelAll(reason: reason)
@@ -375,6 +382,7 @@ final class StudioModel: ObservableObject {
             if down { smartDial(binding) }
             return
         }
+        output.endRiveArrowBurst()
         cancelNumericWork()
         engine.handle(control: control, isDown: down, binding: binding, now: ProcessInfo.processInfo.systemUptime)
     }
@@ -406,12 +414,20 @@ final class StudioModel: ObservableObject {
         let steps = riveShortcutSteps.take(context: context, now: ProcessInfo.processInfo.systemUptime)
         for step in steps {
             guard !focusObserver.revalidating, context == riveShortcutContext else { break }
-            let sent = output.smartShortcut(step.shortcut)
+            let sent = sendSmartShortcut(step.shortcut)
             recordDialDecision(step.control, modifiers: step.selectors, shortcut: step.shortcut,
                                result: sent ? "Shortcut sent after focus verification" : "Shortcut unavailable")
             panelDiagnostics.note("focusVerification", sent ? "Pending arrow sent to same field" : "Pending arrow unavailable")
             if !sent { break }
         }
+    }
+
+    private func sendSmartShortcut(_ shortcut: SmartShortcut) -> Bool {
+        if [125, 126].contains(shortcut.keyCode), shortcut.repeatCount == 1,
+           let context = riveShortcutContext {
+            return output.riveArrowShortcut(shortcut, context: context)
+        }
+        return output.smartShortcut(shortcut)
     }
     private func smartDial(_ binding: ControlBinding) {
         engine.prepareSmartDial(binding.controlID)
@@ -422,19 +438,21 @@ final class StudioModel: ObservableObject {
         let modifiers = output.physicalModifiers
         guard let settings = binding.smart,
               let choice = settings.selection(for: modifiers) else {
+            output.endRiveArrowBurst()
             cancelNumericWork()
             recordDialDecision(binding.controlID, modifiers: modifiers, shortcut: nil, result: "No matching modifier rule")
             return
         }
         if let shortcut = choice.shortcut {
             cancelNumericWork()
-            let sent = output.smartShortcut(shortcut)
+            let sent = sendSmartShortcut(shortcut)
             recordDialDecision(binding.controlID, modifiers: modifiers, shortcut: shortcut,
                                result: sent ? "Shortcut sent" : "Shortcut unavailable")
             record(sent ? "Smart · custom shortcut sent" : "Smart · shortcut unavailable")
             return
         }
         let focus = focusedInput
+        output.endRiveArrowBurst()
         recordDialDecision(binding.controlID, modifiers: modifiers, shortcut: nil, result: "Numeric selected")
         if focus.kind == .unavailable {
             if settings.fallbackToActions {

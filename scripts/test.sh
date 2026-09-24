@@ -29,6 +29,7 @@ run NumericFocusGeometry Native/Core/NumericFocusGeometry.swift
 RIVE=(Native/Core/NumericAdjustment.swift Native/Core/RiveNumericText.swift Native/Core/RivePanelClassifier.swift)
 run RiveNumericText Native/Core/NumericAdjustment.swift Native/Core/RiveNumericText.swift
 run RiveShortcutBuffer Native/Core/Models.swift Native/Core/RiveShortcutBuffer.swift
+run RiveArrowBurst Native/Core/Models.swift Native/Core/RiveShortcutBuffer.swift Native/Core/RiveArrowBurst.swift
 run RivePanelClassifier "${RIVE[@]}"
 run RiveAreaLayout Native/Core/Models.swift "${RIVE[@]}" Native/Core/RiveAreaLayout.swift
 run RiveAreaSelection Native/Core/Models.swift "${RIVE[@]}" Native/Core/RiveAreaLayout.swift Native/Core/RiveAreaSelection.swift

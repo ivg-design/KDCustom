@@ -11,6 +11,7 @@ final class SystemActionOutput: ActionOutput {
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var physical = PhysicalInputState()
+    private var riveArrowBurst = RiveArrowBurst()
     private(set) var observing = false
     var enabled = false
     /// Used only by the neutral in-app verifier; normal control output stays on the HID path.
@@ -45,21 +46,23 @@ final class SystemActionOutput: ActionOutput {
                     owner.seedPhysicalState()
                     owner.observing = true
                 } else if event.getIntegerValueField(.eventSourceUserData) != SystemActionOutput.eventMarker {
+                    let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+                    // Establish physical ownership before cancellation can
+                    // release a synthesized arrow held by the same key.
+                    if type == .keyDown { owner.physical.key(code, down: true, posted: false) }
+                    if type == .keyUp { owner.physical.key(code, down: false, posted: false) }
+                    if type == .flagsChanged { owner.physical.modifier(code, flags: event.flags.rawValue) }
                     if [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel].contains(type) {
+                        owner.endRiveArrowBurst()
                         owner.onPhysicalEditingInput?()
                     }
+                    if type == .flagsChanged { owner.endRiveArrowBurst() }
                     if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(type) {
                         owner.onPhysicalPointerDown?(event.location)
                     }
-                    let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
                     if (type == .keyDown || type == .keyUp), [36, 48, 53, 76, 123, 124, 125, 126].contains(code) {
                         owner.onExternalNavigation?(code, type == .keyDown,
                             event.getIntegerValueField(.eventSourceUnixProcessID), event.flags.rawValue)
-                    }
-                    if type == .keyDown { owner.physical.key(code, down: true, posted: false) }
-                    if type == .keyUp { owner.physical.key(code, down: false, posted: false) }
-                    if type == .flagsChanged {
-                        owner.physical.modifier(code, flags: event.flags.rawValue)
                     }
                     if [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
                         .otherMouseDown, .otherMouseUp].contains(type) {
@@ -78,6 +81,7 @@ final class SystemActionOutput: ActionOutput {
         observing = true
     }
     func stopObserving() {
+        endRiveArrowBurst()
         if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
         if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
         tap = nil; runLoopSource = nil; physical = PhysicalInputState(); observing = false
@@ -124,6 +128,7 @@ final class SystemActionOutput: ActionOutput {
     /// marked key events. No physical modifier-up event is synthesized.
     @discardableResult
     func smartShortcut(_ shortcut: SmartShortcut) -> Bool {
+        endRiveArrowBurst()
         guard enabled, !physicalKeyIsDown(shortcut.keyCode),
               ![54, 55, 56, 58, 59, 60, 61, 62, 63].contains(shortcut.keyCode) else { return false }
         let exact = CGEventFlags(rawValue: MacModifierFlags.encode(shortcut.modifiers))
@@ -141,6 +146,32 @@ final class SystemActionOutput: ActionOutput {
             guard post(up, summary: "Smart shortcut up", release: true) else { return false }
         }
         return true
+    }
+
+    func riveArrowShortcut(_ shortcut: SmartShortcut, context: RiveShortcutBuffer.Context) -> Bool {
+        riveArrowBurst.step(shortcut, context: context, now: ProcessInfo.processInfo.systemUptime,
+                            emit: emitRiveArrow)
+    }
+    func tickRiveArrowBurst() {
+        riveArrowBurst.tick(now: ProcessInfo.processInfo.systemUptime, emit: emitRiveArrow)
+    }
+    func endRiveArrowBurst() { _ = riveArrowBurst.end(emit: emitRiveArrow) }
+
+    private func emitRiveArrow(_ event: RiveArrowBurst.Event) -> Bool {
+        if physicalKeyIsDown(event.keyCode) {
+            guard !event.down else { return false }
+            // The user's physical hold now owns the eventual up.
+            physical.key(event.keyCode, down: false, posted: true)
+            return true
+        }
+        // An independently running macro may already own this key.
+        if event.down && !event.isRepeat && physical.postedKeys.contains(event.keyCode) { return false }
+        let native = CGEvent(keyboardEventSource: source, virtualKey: event.keyCode, keyDown: event.down)
+        native?.flags = CGEventFlags(rawValue: MacModifierFlags.encode(event.modifiers))
+            .union(physicalFlags.intersection(.maskAlphaShift))
+        native?.setIntegerValueField(.keyboardEventAutorepeat, value: event.isRepeat ? 1 : 0)
+        return post(native, summary: event.down ? (event.isRepeat ? "Rive arrow repeat" : "Rive arrow down") : "Rive arrow up",
+                    release: !event.down)
     }
     @discardableResult
     private func post(_ event: CGEvent?, summary: String, release: Bool = false) -> Bool {
@@ -171,6 +202,7 @@ final class SystemActionOutput: ActionOutput {
     }
     @discardableResult
     func key(code: UInt16, down: Bool, modifiers: KeyModifiers) -> Bool {
+        endRiveArrowBurst()
         let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)
         event?.flags = flags(modifiers, changingKey: code, down: down)
         if [54, 55, 56, 58, 59, 60, 61, 62, 63].contains(code) { event?.type = .flagsChanged }
@@ -189,6 +221,7 @@ final class SystemActionOutput: ActionOutput {
     }
 
     private func postText(_ value: String, flags: CGEventFlags) -> Bool {
+        endRiveArrowBurst()
         let units = Array(value.utf16)
         for down in [true, false] {
             let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
@@ -200,6 +233,7 @@ final class SystemActionOutput: ActionOutput {
     }
     @discardableResult
     func mouse(button: MouseButton, down: Bool, modifiers: KeyModifiers) -> Bool {
+        endRiveArrowBurst()
         let type: CGEventType
         let native: CGMouseButton
         switch button {
@@ -213,12 +247,14 @@ final class SystemActionOutput: ActionOutput {
         return post(event, summary: "Mouse \(button.rawValue) \(down ? "down" : "up")", release: !down)
     }
     func scroll(horizontal: Int, vertical: Int, modifiers: KeyModifiers) {
+        endRiveArrowBurst()
         let event = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2,
                             wheel1: Int32(clamping: vertical), wheel2: Int32(clamping: horizontal), wheel3: 0)
         event?.flags = flags(modifiers)
         post(event, summary: "Scroll")
     }
     func media(_ key: MediaKey) {
+        endRiveArrowBurst()
         let code: Int
         switch key {
         case .volumeUp: code = 0
