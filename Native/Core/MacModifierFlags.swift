@@ -3,6 +3,11 @@
 /// macOS key responder synchronizes modifier keys from the side bits.
 enum MacModifierFlags {
     static let sideMask: UInt64 = 0x207f
+    /// Navigation-key identity bits, not a physical Fn selector. Both were
+    /// present in the live keyboard trace and are checked by Flutter text input.
+    static func identifyingArrow(_ code: UInt16, flags: UInt64) -> UInt64 {
+        [123, 124, 125, 126].contains(code) ? flags | 0x00a00000 : flags
+    }
     static func encode(_ modifiers: KeyModifiers, heldKeys: Set<UInt16> = []) -> UInt64 {
         var flags = modifiers.rawValue
         let pairs: [(KeyModifiers, UInt16, UInt16, UInt64, UInt64)] = [

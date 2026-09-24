@@ -63,7 +63,7 @@ final class RivePanelDiagnostics {
         guard armed else { return }
         events.append(["uptime": ProcessInfo.processInfo.systemUptime,
                        "category": category, "detail": detail])
-        if events.count > 400 { events.removeFirst(events.count - 400) }
+        if events.count > 1200 { events.removeFirst(events.count - 1200) }
     }
 
     private func capture(pointer: RivePointerSample? = nil) {

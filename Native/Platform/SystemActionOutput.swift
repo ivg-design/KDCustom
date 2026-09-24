@@ -21,8 +21,9 @@ final class SystemActionOutput: ActionOutput {
     var onObservationLost: (() -> Void)?
     var onPhysicalEditingInput: (() -> Void)?
     var onPhysicalPointerDown: ((CGPoint) -> Void)?
-    var onExternalNavigation: ((UInt16, Bool, Int64, UInt64) -> Void)?
+    var onExternalNavigation: ((UInt16, Bool, Int64, UInt64, Bool) -> Void)?
     var onInjectedNavigation: ((UInt16, Bool, UInt64) -> Void)?
+    var onObservedNavigation: ((UInt16, Bool, UInt64, Bool) -> Void)?
     var onOutput: ((String) -> Void)?
 
     func startObserving() {
@@ -62,12 +63,21 @@ final class SystemActionOutput: ActionOutput {
                     }
                     if (type == .keyDown || type == .keyUp), [36, 48, 53, 76, 123, 124, 125, 126].contains(code) {
                         owner.onExternalNavigation?(code, type == .keyDown,
-                            event.getIntegerValueField(.eventSourceUnixProcessID), event.flags.rawValue)
+                            event.getIntegerValueField(.eventSourceUnixProcessID), event.flags.rawValue,
+                            event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
                     }
                     if [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
                         .otherMouseDown, .otherMouseUp].contains(type) {
                         let button = UInt32(clamping: event.getIntegerValueField(.mouseEventButtonNumber))
                         owner.physical.button(button, down: [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(type), posted: false)
+                    }
+                }
+                if (type == .keyDown || type == .keyUp),
+                   event.getIntegerValueField(.eventSourceUserData) == SystemActionOutput.eventMarker {
+                    let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+                    if [36, 48, 53, 76, 123, 124, 125, 126].contains(code) {
+                        owner.onObservedNavigation?(code, type == .keyDown, event.flags.rawValue,
+                            event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
                     }
                 }
             }
@@ -167,7 +177,8 @@ final class SystemActionOutput: ActionOutput {
         // An independently running macro may already own this key.
         if event.down && !event.isRepeat && physical.postedKeys.contains(event.keyCode) { return false }
         let native = CGEvent(keyboardEventSource: source, virtualKey: event.keyCode, keyDown: event.down)
-        native?.flags = CGEventFlags(rawValue: MacModifierFlags.encode(event.modifiers))
+        native?.flags = CGEventFlags(rawValue: MacModifierFlags.identifyingArrow(event.keyCode,
+            flags: MacModifierFlags.encode(event.modifiers)))
             .union(physicalFlags.intersection(.maskAlphaShift))
         native?.setIntegerValueField(.keyboardEventAutorepeat, value: event.isRepeat ? 1 : 0)
         return post(native, summary: event.down ? (event.isRepeat ? "Rive arrow repeat" : "Rive arrow down") : "Rive arrow up",

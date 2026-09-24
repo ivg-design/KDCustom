@@ -120,9 +120,13 @@ final class StudioModel: ObservableObject {
             self?.panelDiagnostics.pointerDown(point)
             self?.inputAreaObserver.pointerDown(point)
         }
-        output.onExternalNavigation = { [weak self] code, down, source, flags in
+        output.onExternalNavigation = { [weak self] code, down, source, flags, isRepeat in
             guard let self, self.activeBundleID == "app.rive.editor" else { return }
-            self.panelDiagnostics.note("externalNavigation", "key=\(code) \(down ? "down" : "up") source=\(source) flags=\(flags)")
+            self.panelDiagnostics.note("externalNavigation", "key=\(code) \(down ? "down" : "up") source=\(source) flags=\(flags) repeat=\(isRepeat)")
+        }
+        output.onObservedNavigation = { [weak self] code, down, flags, isRepeat in
+            guard let self, self.activeBundleID == "app.rive.editor" else { return }
+            self.panelDiagnostics.note("observedInjection", "key=\(code) \(down ? "down" : "up") flags=\(flags) repeat=\(isRepeat)")
         }
         output.onInjectedNavigation = { [weak self] code, down, flags in
             guard let self, self.activeBundleID == "app.rive.editor" else { return }

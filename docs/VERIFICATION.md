@@ -149,3 +149,17 @@ The user previously confirmed that holding a physical keyboard arrow repeats wit
 All 26 focused suites passed, including deterministic detent counts, repeat flags, direction/context changes, cancellation and failed-release retry. The native build passes warnings as errors. Actual rapid-turn focus retention, modifier behavior and unit-bearing fields still require a live Rive retest; fixtures do not prove this candidate fixes the issue.
 
 Build 32 was Developer ID signed, notarized, stapled and accepted by Gatekeeper, then installed after normal Quit and verified process exit. All 14 profiles remained byte-identical across installation and relaunch; USB and the three required permissions are ready.
+
+The user reported that build 32 still loses field focus. The captured stream contains continuous repeat downs without intervening ups before a real focus change, so removing per-detent ups was not a sufficient fix. A subsequent requested physical-keyboard capture contains both plain and Command-modified Up/Down holds. Its retained repeat intervals have a median of 83.31 ms (about 12 Hz), versus 24.27 ms (about 41 Hz) for the rapid dial's injected downs. The original 400-event ring truncated the start; these are retained intervals, not a complete count of the session.
+
+## Build 33: arrow identification flags
+
+The physical keyboard capture reports plain arrow flags `0xa00100` and left-Command arrow flags `0xb00108`. The arrow identification bits `0xa00000` (Function and Numeric Pad) were absent from the app's generated events. The installed macOS headers define these flags; current [Flutter text-input code](https://github.com/flutter/flutter/blob/master/engine/src/flutter/shell/platform/darwin/macos/framework/Source/FlutterTextInputPlugin.mm#L641-L644) uses their conjunction to identify navigation events. This source is a behavioral reference, not proof of the exact engine revision or focus-loss cause in the installed Rive editor.
+
+A local construction-only check (no events posted) shows AppKit adds the Function bit when converting the old CGEvent into an NSEvent, but the Numeric Pad bit remains missing. Both old and corrected events produce the expected arrow character (`U+F700`/`U+F701`) and repeat boolean. Thus the directly demonstrated AppKit difference is Numeric Pad identification, not a missing arrow character or repeat marker.
+
+Build 33 adds those identity bits only to the verified Rive numeric arrow path. Physical modifier selectors, repeat timing, queue behavior and profile mappings are unchanged. It does not synthesize a physical Fn press. The bounded diagnostic now records observed marked navigation events at the HID tap, including the repeat bit, separately from posted events and physical navigation events. Its capacity is 1,200 events. These observations still do not expose Rive's internal handlers.
+
+Focused tests verify both arrow identity bits, preservation of Command/Shift side flags, idempotence, and non-arrow exclusion. Live focus retention and modifier acceptance remain pending; no pacing limit has been introduced on the basis of the keyboard-rate comparison.
+
+Build 33 passed the warnings-as-errors native build, was Developer ID signed, notarized, stapled and accepted by Gatekeeper, and was installed after normal Quit and verified process exit. All 14 profiles are byte-identical across installation and relaunch; USB and all required permissions are ready.
